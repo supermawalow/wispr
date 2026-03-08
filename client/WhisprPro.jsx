@@ -6,7 +6,7 @@ import {
   MoreVertical, Menu
 } from 'lucide-react';
 
-const SERVER_URL = 'https://whispr-server.onrender.com';
+const SERVER_URL = 'https://whispr-server-u5zy.onrender.com';
 
 export default function WhisprPro() {
   const [socket, setSocket] = useState(null);
