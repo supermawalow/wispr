@@ -2,215 +2,391 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
-const mongoose = require('mongoose');
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-  cors: { origin: "*", methods: ["GET", "POST"], credentials: true },
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+    credentials: true
+  },
   transports: ['websocket', 'polling']
 });
 
-app.use(cors({ origin: "*", credentials: true }));
+app.use(cors({
+  origin: "*",
+  credentials: true
+}));
 app.use(express.json());
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/whispr';
-mongoose.connect(MONGODB_URI)
-  .then(() => console.log('✅ MongoDB подключена'))
-  .catch(err => console.error('❌ Ошибка MongoDB:', err));
+// База данных в памяти (для продакшена используй MongoDB или PostgreSQL)
+const users = new Map(); // username -> { id, username, displayName, password, isAdmin, contacts: [], blockedUsers: [] }
+const onlineUsers = new Map(); // socketId -> username
+const messages = new Map(); // chatId -> [messages]
+const userSockets = new Map(); // username -> socketId
 
-const userSchema = new mongoose.Schema({
-  username:    { type: String, required: true, unique: true, lowercase: true },
-  displayName: { type: String, required: true },
-  password:    { type: String, required: true },
-  isAdmin:     { type: Boolean, default: false },
-  contacts:    [{ type: String }],
-  createdAt:   { type: Date, default: Date.now }
+// Создаём admin аккаунт по умолчанию
+users.set('admin', {
+  id: 'admin-001',
+  username: 'admin',
+  displayName: 'Администратор',
+  password: 'mawadmin', // В продакшене ОБЯЗАТЕЛЬНО хешировать!
+  isAdmin: true,
+  contacts: [],
+  blockedUsers: [],
+  createdAt: new Date().toISOString()
 });
 
-const messageSchema = new mongoose.Schema({
-  chatId:    { type: String, required: true, index: true },
-  from:      { type: String, required: true },
-  to:        { type: String, required: true },
-  text:      { type: String, required: true },
-  timestamp: { type: Date, default: Date.now },
-  read:      { type: Boolean, default: false }
-});
+// Функции для работы с чатами
+function getChatId(user1, user2) {
+  return [user1, user2].sort().join('_');
+}
 
-const User    = mongoose.model('User', userSchema);
-const Message = mongoose.model('Message', messageSchema);
-
-mongoose.connection.once('open', async () => {
-  const admin = await User.findOne({ username: 'admin' });
-  if (!admin) {
-    await User.create({ username: 'admin', displayName: 'Администратор', password: 'admin123', isAdmin: true });
-    console.log('👑 Admin создан: admin / admin123');
+function getChatMessages(chatId) {
+  if (!messages.has(chatId)) {
+    messages.set(chatId, []);
   }
-});
-
-const onlineUsers = new Map();
-const userSockets = new Map();
-
-function getChatId(u1, u2) { return [u1, u2].sort().join('_'); }
+  return messages.get(chatId);
+}
 
 io.on('connection', (socket) => {
-  console.log('🟢 Подключение:', socket.id);
+  console.log('🟢 Новое подключение:', socket.id);
 
-  socket.on('register', async (data, cb) => {
-    try {
-      const { username, displayName, password } = data;
-      if (!username || !displayName || !password) return cb({ success: false, error: 'Все поля обязательны' });
-      if (await User.findOne({ username: username.toLowerCase() })) return cb({ success: false, error: 'Username уже занят' });
-      const user = await User.create({ username: username.toLowerCase(), displayName, password });
-      console.log(`👤 Зарегистрирован: ${username}`);
-      cb({ success: true, user: { ...user.toObject(), password: undefined } });
-    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  // Регистрация нового пользователя
+  socket.on('register', (data, callback) => {
+    const { username, displayName, password } = data;
+    
+    if (!username || !displayName || !password) {
+      return callback({ success: false, error: 'Все поля обязательны' });
+    }
+
+    if (users.has(username.toLowerCase())) {
+      return callback({ success: false, error: 'Username уже занят' });
+    }
+
+    const newUser = {
+      id: `user-${Date.now()}`,
+      username: username.toLowerCase(),
+      displayName: displayName,
+      password: password, // В продакшене хешировать!
+      isAdmin: false,
+      contacts: [],
+      blockedUsers: [],
+      createdAt: new Date().toISOString()
+    };
+
+    users.set(username.toLowerCase(), newUser);
+    
+    console.log(`👤 Новый пользователь зарегистрирован: ${username}`);
+    callback({ success: true, user: { ...newUser, password: undefined } });
   });
 
-  socket.on('login', async (data, cb) => {
-    try {
-      const { username, password } = data;
-      const user = await User.findOne({ username: username.toLowerCase() });
-      if (!user) return cb({ success: false, error: 'Пользователь не найден' });
-      if (user.password !== password) return cb({ success: false, error: 'Неверный пароль' });
-      const oldSocket = userSockets.get(user.username);
-      if (oldSocket) io.to(oldSocket).emit('force_disconnect', { reason: 'Новый вход с другого устройства' });
-      onlineUsers.set(socket.id, user.username);
-      userSockets.set(user.username, socket.id);
-      const contactDocs = await User.find({ username: { $in: user.contacts } });
-      const contacts = contactDocs.map(c => ({ username: c.username, displayName: c.displayName, isOnline: userSockets.has(c.username) }));
-      io.emit('user_status_change', { username: user.username, isOnline: true });
-      console.log(`✅ Вход: ${username}`);
-      cb({ success: true, user: { ...user.toObject(), password: undefined }, contacts });
-    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  // Вход существующего пользователя
+  socket.on('login', (data, callback) => {
+    const { username, password } = data;
+    
+    const user = users.get(username.toLowerCase());
+    
+    if (!user) {
+      return callback({ success: false, error: 'Пользователь не найден' });
+    }
+
+    if (user.password !== password) {
+      return callback({ success: false, error: 'Неверный пароль' });
+    }
+
+    // Отключаем предыдущую сессию если есть
+    const oldSocket = userSockets.get(username.toLowerCase());
+    if (oldSocket) {
+      io.to(oldSocket).emit('force_disconnect', { reason: 'Новый вход с другого устройства' });
+    }
+
+    onlineUsers.set(socket.id, username.toLowerCase());
+    userSockets.set(username.toLowerCase(), socket.id);
+
+    // Отправляем данные пользователя
+    const userData = { ...user, password: undefined };
+    
+    // Отправляем список контактов с их статусами
+    const contactsWithStatus = user.contacts.map(contactUsername => {
+      const contact = users.get(contactUsername);
+      return {
+        username: contactUsername,
+        displayName: contact?.displayName || contactUsername,
+        isOnline: Array.from(onlineUsers.values()).includes(contactUsername)
+      };
+    });
+
+    // Уведомляем всех о новом онлайн пользователе
+    io.emit('user_status_change', { 
+      username: username.toLowerCase(), 
+      isOnline: true 
+    });
+
+    console.log(`✅ Вход: ${username}`);
+    callback({ 
+      success: true, 
+      user: userData,
+      contacts: contactsWithStatus 
+    });
   });
 
-  socket.on('search_users', async (query, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
-    try {
-      const results = await User.find({ username: { $ne: me }, $or: [{ username: { $regex: query, $options: 'i' } }, { displayName: { $regex: query, $options: 'i' } }] }).limit(20);
-      cb({ success: true, results: results.map(u => ({ username: u.username, displayName: u.displayName, isOnline: userSockets.has(u.username) })) });
-    } catch (e) { cb({ success: false, error: 'Ошибка поиска' }); }
+  // Поиск пользователей
+  socket.on('search_users', (query, callback) => {
+    const currentUser = onlineUsers.get(socket.id);
+    if (!currentUser) return callback({ success: false, error: 'Не авторизован' });
+
+    const results = Array.from(users.values())
+      .filter(u => 
+        u.username !== currentUser && 
+        (u.username.includes(query.toLowerCase()) || 
+         u.displayName.toLowerCase().includes(query.toLowerCase()))
+      )
+      .slice(0, 20)
+      .map(u => ({
+        username: u.username,
+        displayName: u.displayName,
+        isOnline: Array.from(onlineUsers.values()).includes(u.username)
+      }));
+
+    callback({ success: true, results });
   });
 
-  socket.on('add_contact', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
-    try {
-      const user = await User.findOne({ username: me });
-      const targetUser = await User.findOne({ username: target.toLowerCase() });
-      if (!targetUser) return cb({ success: false, error: 'Пользователь не найден' });
-      if (user.contacts.includes(target.toLowerCase())) return cb({ success: false, error: 'Уже в контактах' });
-      user.contacts.push(target.toLowerCase());
-      await user.save();
-      cb({ success: true, contact: { username: targetUser.username, displayName: targetUser.displayName, isOnline: userSockets.has(targetUser.username) } });
-    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  // Добавить в контакты
+  socket.on('add_contact', (targetUsername, callback) => {
+    const currentUser = onlineUsers.get(socket.id);
+    if (!currentUser) return callback({ success: false, error: 'Не авторизован' });
+
+    const user = users.get(currentUser);
+    const targetUser = users.get(targetUsername.toLowerCase());
+
+    if (!targetUser) {
+      return callback({ success: false, error: 'Пользователь не найден' });
+    }
+
+    if (user.contacts.includes(targetUsername.toLowerCase())) {
+      return callback({ success: false, error: 'Уже в контактах' });
+    }
+
+    user.contacts.push(targetUsername.toLowerCase());
+
+    callback({ 
+      success: true, 
+      contact: {
+        username: targetUser.username,
+        displayName: targetUser.displayName,
+        isOnline: Array.from(onlineUsers.values()).includes(targetUser.username)
+      }
+    });
+
+    console.log(`📇 ${currentUser} добавил ${targetUsername} в контакты`);
   });
 
-  socket.on('remove_contact', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
-    try {
-      await User.updateOne({ username: me }, { $pull: { contacts: target.toLowerCase() } });
-      cb({ success: true });
-    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  // Удалить из контактов
+  socket.on('remove_contact', (targetUsername, callback) => {
+    const currentUser = onlineUsers.get(socket.id);
+    if (!currentUser) return callback({ success: false, error: 'Не авторизован' });
+
+    const user = users.get(currentUser);
+    user.contacts = user.contacts.filter(c => c !== targetUsername.toLowerCase());
+
+    callback({ success: true });
+    console.log(`📇 ${currentUser} удалил ${targetUsername} из контактов`);
   });
 
-  socket.on('load_chat', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
-    try {
-      const msgs = await Message.find({ chatId: getChatId(me, target.toLowerCase()) }).sort({ timestamp: 1 }).limit(200);
-      cb({ success: true, messages: msgs });
-    } catch (e) { cb({ success: false, error: 'Ошибка загрузки' }); }
+  // Загрузить историю чата
+  socket.on('load_chat', (targetUsername, callback) => {
+    const currentUser = onlineUsers.get(socket.id);
+    if (!currentUser) return callback({ success: false, error: 'Не авторизован' });
+
+    const chatId = getChatId(currentUser, targetUsername.toLowerCase());
+    const chatMessages = getChatMessages(chatId);
+
+    callback({ success: true, messages: chatMessages });
   });
 
-  socket.on('send_message', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
-    try {
-      const { to, text } = data;
-      const msg = await Message.create({ chatId: getChatId(me, to.toLowerCase()), from: me, to: to.toLowerCase(), text });
-      socket.emit('new_message', msg);
-      const recvSocket = userSockets.get(to.toLowerCase());
-      if (recvSocket) io.to(recvSocket).emit('new_message', msg);
-      cb({ success: true, message: msg });
-    } catch (e) { cb({ success: false, error: 'Ошибка отправки' }); }
+  // Отправить личное сообщение
+  socket.on('send_message', (data, callback) => {
+    const currentUser = onlineUsers.get(socket.id);
+    if (!currentUser) return callback({ success: false, error: 'Не авторизован' });
+
+    const { to, text } = data;
+    const chatId = getChatId(currentUser, to.toLowerCase());
+    
+    const message = {
+      id: Date.now(),
+      from: currentUser,
+      to: to.toLowerCase(),
+      text: text,
+      timestamp: new Date().toISOString(),
+      read: false
+    };
+
+    getChatMessages(chatId).push(message);
+
+    // Отправляем отправителю
+    socket.emit('new_message', message);
+
+    // Отправляем получателю если онлайн
+    const recipientSocket = userSockets.get(to.toLowerCase());
+    if (recipientSocket) {
+      io.to(recipientSocket).emit('new_message', message);
+    }
+
+    callback({ success: true, message });
+    console.log(`💬 ${currentUser} -> ${to}: ${text.substring(0, 30)}...`);
   });
 
-  socket.on('typing', (target) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return;
-    const s = userSockets.get(target.toLowerCase());
-    if (s) io.to(s).emit('user_typing', { from: me });
+  // Печатает...
+  socket.on('typing', (targetUsername) => {
+    const currentUser = onlineUsers.get(socket.id);
+    if (!currentUser) return;
+
+    const recipientSocket = userSockets.get(targetUsername.toLowerCase());
+    if (recipientSocket) {
+      io.to(recipientSocket).emit('user_typing', { from: currentUser });
+    }
   });
 
-  socket.on('admin_get_stats', async (cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
-    try {
-      const user = await User.findOne({ username: me });
-      if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
-      const [totalUsers, totalMessages, chats] = await Promise.all([User.countDocuments(), Message.countDocuments(), Message.distinct('chatId')]);
-      cb({ success: true, stats: { totalUsers, onlineUsers: onlineUsers.size, totalMessages, totalChats: chats.length } });
-    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  // АДМИН: Получить статистику
+  socket.on('admin_get_stats', (callback) => {
+    const currentUser = onlineUsers.get(socket.id);
+    if (!currentUser) return callback({ success: false, error: 'Не авторизован' });
+
+    const user = users.get(currentUser);
+    if (!user?.isAdmin) {
+      return callback({ success: false, error: 'Нет прав администратора' });
+    }
+
+    const stats = {
+      totalUsers: users.size,
+      onlineUsers: onlineUsers.size,
+      totalMessages: Array.from(messages.values()).reduce((sum, msgs) => sum + msgs.length, 0),
+      totalChats: messages.size
+    };
+
+    callback({ success: true, stats });
   });
 
-  socket.on('admin_get_users', async (cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
-    try {
-      const user = await User.findOne({ username: me });
-      if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
-      const users = await User.find();
-      cb({ success: true, users: users.map(u => ({ username: u.username, displayName: u.displayName, isAdmin: u.isAdmin, contactsCount: u.contacts.length, createdAt: u.createdAt, isOnline: userSockets.has(u.username) })) });
-    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  // АДМИН: Получить список всех пользователей
+  socket.on('admin_get_users', (callback) => {
+    const currentUser = onlineUsers.get(socket.id);
+    if (!currentUser) return callback({ success: false, error: 'Не авторизован' });
+
+    const user = users.get(currentUser);
+    if (!user?.isAdmin) {
+      return callback({ success: false, error: 'Нет прав администратора' });
+    }
+
+    const usersList = Array.from(users.values()).map(u => ({
+      username: u.username,
+      displayName: u.displayName,
+      isAdmin: u.isAdmin,
+      contactsCount: u.contacts.length,
+      createdAt: u.createdAt,
+      isOnline: Array.from(onlineUsers.values()).includes(u.username)
+    }));
+
+    callback({ success: true, users: usersList });
   });
 
-  socket.on('admin_delete_user', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
-    try {
-      const user = await User.findOne({ username: me });
-      if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
-      if (target === 'admin') return cb({ success: false, error: 'Нельзя удалить админа' });
-      await User.deleteOne({ username: target.toLowerCase() });
-      const s = userSockets.get(target.toLowerCase());
-      if (s) io.to(s).emit('force_disconnect', { reason: 'Аккаунт удалён' });
-      cb({ success: true });
-    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  // АДМИН: Удалить пользователя
+  socket.on('admin_delete_user', (targetUsername, callback) => {
+    const currentUser = onlineUsers.get(socket.id);
+    if (!currentUser) return callback({ success: false, error: 'Не авторизован' });
+
+    const user = users.get(currentUser);
+    if (!user?.isAdmin) {
+      return callback({ success: false, error: 'Нет прав администратора' });
+    }
+
+    if (targetUsername === 'admin') {
+      return callback({ success: false, error: 'Нельзя удалить админа' });
+    }
+
+    users.delete(targetUsername.toLowerCase());
+
+    // Отключаем пользователя если онлайн
+    const targetSocket = userSockets.get(targetUsername.toLowerCase());
+    if (targetSocket) {
+      io.to(targetSocket).emit('force_disconnect', { reason: 'Аккаунт удалён администратором' });
+    }
+
+    callback({ success: true });
+    console.log(`⚠️ ADMIN удалил пользователя: ${targetUsername}`);
   });
 
-  socket.on('admin_promote_user', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
-    try {
-      const user = await User.findOne({ username: me });
-      if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
-      const t = await User.findOneAndUpdate({ username: target.toLowerCase() }, { isAdmin: true });
-      if (!t) return cb({ success: false, error: 'Пользователь не найден' });
-      cb({ success: true });
-    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  // АДМИН: Сделать пользователя админом
+  socket.on('admin_promote_user', (targetUsername, callback) => {
+    const currentUser = onlineUsers.get(socket.id);
+    if (!currentUser) return callback({ success: false, error: 'Не авторизован' });
+
+    const user = users.get(currentUser);
+    if (!user?.isAdmin) {
+      return callback({ success: false, error: 'Нет прав администратора' });
+    }
+
+    const targetUser = users.get(targetUsername.toLowerCase());
+    if (!targetUser) {
+      return callback({ success: false, error: 'Пользователь не найден' });
+    }
+
+    targetUser.isAdmin = true;
+    callback({ success: true });
+    console.log(`👑 ${targetUsername} теперь администратор`);
   });
 
+  // Отключение
   socket.on('disconnect', () => {
     const username = onlineUsers.get(socket.id);
+    
     if (username) {
       onlineUsers.delete(socket.id);
       userSockets.delete(username);
-      io.emit('user_status_change', { username, isOnline: false });
+
+      // Уведомляем всех об офлайне
+      io.emit('user_status_change', { 
+        username: username, 
+        isOnline: false 
+      });
+
       console.log(`🔴 ${username} отключился`);
     }
   });
 });
 
-app.get('/health', async (req, res) => {
-  res.json({ status: 'ok', users: await User.countDocuments().catch(()=>0), online: onlineUsers.size, messages: await Message.countDocuments().catch(()=>0), uptime: process.uptime() });
+// REST API
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    users: users.size,
+    online: onlineUsers.size,
+    chats: messages.size,
+    uptime: process.uptime()
+  });
 });
 
 const PORT = process.env.PORT || 3001;
+
 server.listen(PORT, () => {
-  console.log(`🚀 Whispr Server on port ${PORT}`);
+  console.log(`
+  ╔═══════════════════════════════════════╗
+  ║   🚀 Whispr Pro Server Running!      ║
+  ║   📡 Port: ${PORT}                      ║
+  ║   🌐 http://localhost:${PORT}          ║
+  ║                                       ║
+  ║   👑 Admin Login:                    ║
+  ║   Username: admin                    ║
+  ║   Password: admin123                 ║
+  ╚═══════════════════════════════════════╝
+  `);
 });
-process.on('SIGTERM', () => server.close(() => process.exit(0)));
+
+process.on('SIGTERM', () => {
+  console.log('⚠️ SIGTERM received, closing server...');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
