@@ -8,11 +8,16 @@ const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling']
 });
 
-app.use(cors());
+app.use(cors({
+  origin: "*",
+  credentials: true
+}));
 app.use(express.json());
 
 // База данных в памяти (для продакшена используй MongoDB или PostgreSQL)
@@ -26,7 +31,7 @@ users.set('admin', {
   id: 'admin-001',
   username: 'admin',
   displayName: 'Администратор',
-  password: 'admin123', // В продакшене ОБЯЗАТЕЛЬНО хешировать!
+  password: 'mawadmin', // В продакшене ОБЯЗАТЕЛЬНО хешировать!
   isAdmin: true,
   contacts: [],
   blockedUsers: [],
