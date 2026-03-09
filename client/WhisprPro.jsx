@@ -4,7 +4,8 @@ import {
   Send, Search, UserPlus, LogOut, Shield, Trash2,
   Crown, X, Menu, Mic, MicOff, Play, Pause, Ban, History,
   Plus, UserCheck, Hash, Settings, Phone, PhoneOff, Check,
-  MoreVertical, Forward, Pencil, Users, Palette, Camera, AtSign
+  MoreVertical, Forward, Pencil, Users, Palette, Camera, AtSign,
+  Pin, PinOff, Eye, EyeOff, Clock, Coffee, BellOff, Info, MessageSquare
 } from 'lucide-react';
 
 const SERVER_URL = 'https://whispr-server-u5zy.onrender.com';
@@ -286,11 +287,37 @@ export default function WhisprPro() {
   const [theme, setTheme] = useState(() => { try { return localStorage.getItem('whispr_theme')||'violet'; } catch { return 'violet'; } });
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editUsername, setEditUsername] = useState('');
+  const [editBio, setEditBio] = useState('');
   const [profileError, setProfileError] = useState('');
   const [profileSuccess, setProfileSuccess] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
 
   const [showSidebar, setShowSidebar] = useState(true);
+  // Поиск по сообщениям
+  const [showMsgSearch, setShowMsgSearch] = useState(false);
+  const [msgSearchQuery, setMsgSearchQuery] = useState('');
+  const [msgSearchResults, setMsgSearchResults] = useState([]);
+  const [msgSearchLoading, setMsgSearchLoading] = useState(false);
+  // Закреплённое сообщение
+  const [pinnedMessage, setPinnedMessage] = useState(null);
+  // Профиль пользователя
+  const [viewingProfile, setViewingProfile] = useState(null);
+  // Счётчики непрочитанных
+  const [unreadCounts, setUnreadCounts] = useState({});
+  // Статус пользователя
+  const [myStatus, setMyStatus] = useState('online');
+  // Горячая клавиша Esc
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === 'Escape') {
+        setShowSearch(false); setShowCreateGroup(false); setShowSettings(false);
+        setShowGroupInfo(false); setShowAdminPanel(false); setShowForwardModal(false);
+        setShowMsgSearch(false); setViewingProfile(null); setMsgMenu(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef({});
   const currentUserRef = useRef(null);
@@ -395,8 +422,31 @@ export default function WhisprPro() {
   useEffect(() => {
     const s = io(SERVER_URL,{transports:['websocket','polling']});
     setSocket(s); socketRef.current=s;
-    s.on('new_message', msg => { const me=currentUserRef.current?.username; const key=msg.from===me?msg.to:msg.from; setMessages(p=>({...p,[key]:[...(p[key]||[]),msg]})); });
-    s.on('new_group_message', msg => { const key=`group_${msg.groupId}`; setMessages(p=>({...p,[key]:[...(p[key]||[]),msg]})); });
+    s.on('new_message', msg => {
+      const me = currentUserRef.current?.username;
+      const key = msg.from === me ? msg.to : msg.from;
+      setMessages(p => ({...p, [key]: [...(p[key]||[]), msg]}));
+      // Счётчик непрочитанных
+      if (msg.from !== me) {
+        setUnreadCounts(p => {
+          const active = activeChatRef.current;
+          if (active?.type === 'direct' && active.id === key) return p;
+          return {...p, [key]: (p[key]||0) + 1};
+        });
+      }
+    });
+    s.on('new_group_message', msg => {
+      const key = `group_${msg.groupId}`;
+      setMessages(p => ({...p, [key]: [...(p[key]||[]), msg]}));
+      const me = currentUserRef.current?.username;
+      if (msg.from !== me) {
+        setUnreadCounts(p => {
+          const active = activeChatRef.current;
+          if (active?.type === 'group' && active.id === msg.groupId) return p;
+          return {...p, [key]: (p[key]||0) + 1};
+        });
+      }
+    });
     s.on('message_edited', ({messageId,newText,edited}) => setMessages(p=>{const u={...p};for(const k of Object.keys(u))u[k]=u[k].map(m=>(m._id===messageId||m.id===messageId)?{...m,text:newText,edited}:m);return u;}));
     s.on('message_deleted', ({messageId}) => setMessages(p=>{const u={...p};for(const k of Object.keys(u))u[k]=u[k].filter(m=>m._id!==messageId&&m.id!==messageId);return u;}));
     s.on('group_created', g => setGroups(p=>p.find(x=>x._id===g._id)?p:[...p,g]));
@@ -427,10 +477,21 @@ export default function WhisprPro() {
     s.on('call_rejected', ()=>{alert('Звонок отклонён');cleanupCall();});
     s.on('call_failed', ({reason})=>{alert(reason);cleanupCall();});
     s.on('force_disconnect', ({reason})=>{handleLogout();});
+    s.on('message_pinned', ({groupId, messageId, pinnedBy}) => {
+      if (messageId) {
+        s.emit('get_pinned_message', groupId, res => { if(res.success) setPinnedMessage(p => ({...p, [groupId]: res.message})); });
+      } else {
+        setPinnedMessage(p => ({...p, [groupId]: null}));
+      }
+    });
+    // Счётчик непрочитанных — увеличиваем при новом сообщении если чат не активен
+    s.on('new_message', msg => {}); // уже обрабатывается выше
     return ()=>{s.close();cleanupCall();};
   }, []);
 
   useEffect(()=>{currentUserRef.current=currentUser;},[currentUser]);
+  const activeChatRef = useRef(null);
+  useEffect(()=>{ activeChatRef.current = activeChat; },[activeChat]);
 
   // Auto-login from saved creds
   useEffect(()=>{
@@ -489,6 +550,7 @@ export default function WhisprPro() {
     setProfileError('');setProfileSuccess('');setSavingProfile(true);
     const data={};
     if(editDisplayName.trim()&&editDisplayName.trim()!==currentUser.displayName)data.displayName=editDisplayName.trim();
+    if(editBio.trim()!==currentUser.bio)data.bio=editBio.trim();
     if(editUsername.trim()&&editUsername.trim()!==currentUser.username)data.newUsername=editUsername.trim();
     if(!Object.keys(data).length){setSavingProfile(false);setProfileSuccess('Нечего менять');return;}
     const currentPassword = savedCredsRef.current?.p || password || (()=>{try{const s=localStorage.getItem('whispr_creds');return s?JSON.parse(s).p:'';}catch{return '';}})();
@@ -505,6 +567,7 @@ export default function WhisprPro() {
         setProfileSuccess('Профиль обновлён!');
         setEditUsername(res.user.username);
         setEditDisplayName(res.user.displayName);
+        setEditBio(res.user.bio||'');
       } else setProfileError(res.error);
     });
   };
@@ -512,8 +575,14 @@ export default function WhisprPro() {
   const handleSearch = q=>{setSearchQuery(q);if(q.length<2){setSearchResults([]);return;}socket.emit('search_users',q,res=>{if(res.success)setSearchResults(res.results);});};
   const handleAddContact = u=>{socket.emit('add_contact',u,res=>{if(res.success){setContacts(p=>[...p,res.contact]);if(res.contact.avatar)setAvatars(p=>({...p,[res.contact.username]:res.contact.avatar}));setSearchResults([]);setSearchQuery('');setShowSearch(false);}});};
   const handleRemoveContact = u=>{if(!confirm(`Удалить ${u}?`))return;socket.emit('remove_contact',u,res=>{if(res.success){setContacts(p=>p.filter(c=>c.username!==u));if(activeChat?.id===u)setActiveChat(null);}});};
-  const openDirectChat = c=>{setActiveChat({type:'direct',id:c.username,data:c});setShowSearch(false);socket.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});};
-  const openGroupChat = g=>{setActiveChat({type:'group',id:g._id,data:g});socket.emit('load_group_chat',g._id,res=>{if(res.success)setMessages(p=>({...p,[`group_${g._id}`]:res.messages}));});};
+  const openDirectChat = c=>{setActiveChat({type:'direct',id:c.username,data:c});setShowSearch(false);setUnreadCounts(p=>({...p,[c.username]:0}));socket.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});};
+  const openGroupChat = g=>{
+    setActiveChat({type:'group',id:g._id,data:g});
+    setUnreadCounts(p=>({...p,[`group_${g._id}`]:0}));
+    socket.emit('load_group_chat',g._id,res=>{if(res.success)setMessages(p=>({...p,[`group_${g._id}`]:res.messages}));});
+    // Загрузить закреплённое
+    socket.emit('get_pinned_message', g._id, res=>{if(res.success&&res.message)setPinnedMessage(p=>({...p,[g._id]:res.message}));});
+  };
   const handleSendMessage = e=>{e.preventDefault();if(!inputMessage.trim()||!activeChat)return;if(activeChat.type==='direct')socket.emit('send_message',{to:activeChat.id,text:inputMessage.trim(),type:'text'},()=>{});else socket.emit('send_group_message',{groupId:activeChat.id,text:inputMessage.trim(),type:'text'},()=>{});setInputMessage('');};
   const handleTyping = ()=>{if(!activeChat)return;if(activeChat.type==='direct')socket.emit('typing',activeChat.id);else socket.emit('group_typing',activeChat.id);};
   const startEdit = msg=>{setEditingMsgId(msg._id||msg.id);setEditText(msg.text);setMsgMenu(null);};
@@ -531,6 +600,49 @@ export default function WhisprPro() {
   const loadAdminData = (search='')=>{socket.emit('admin_get_stats',res=>{if(res.success)setAdminStats(res.stats);});socket.emit('admin_get_users',{search},res=>{if(res.success)setAllUsers(res.users);});socket.emit('admin_get_logs',res=>{if(res.success)setAdminLogs(res.logs);});};
   const handlePromote = u=>{if(!confirm(`Сделать ${u} администратором?`))return;socket.emit('admin_promote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
   const handleDemote = u=>{if(!confirm(`Разжаловать ${u}?`))return;socket.emit('admin_demote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
+  const handleMsgSearch = (q) => {
+    setMsgSearchQuery(q);
+    if (!q || q.length < 2) { setMsgSearchResults([]); return; }
+    if (!activeChat) return;
+    setMsgSearchLoading(true);
+    const chatKey = activeChat.type==='group' ? `group_${activeChat.id}` : activeChat.id;
+    socket.emit('search_messages', {chatKey, query:q}, res => {
+      setMsgSearchLoading(false);
+      if (res.success) setMsgSearchResults(res.results);
+    });
+  };
+
+  const handleBlockUser = (username, block) => {
+    socket.emit('block_user', {target: username, block}, res => {
+      if (res.success) {
+        setContacts(p => p.map(c => c.username===username ? {...c, isBlockedByMe: block} : c));
+      }
+    });
+  };
+
+  const handleSetStatus = (status) => {
+    setMyStatus(status);
+    socket.emit('set_status', status, () => {});
+  };
+
+  const handleViewProfile = (username) => {
+    socket.emit('get_user_profile', username, res => {
+      if (res.success) setViewingProfile(res.profile);
+    });
+  };
+
+  const handlePinMessage = (msg) => {
+    if (!activeChat || activeChat.type !== 'group') return;
+    const mid = msg._id || msg.id;
+    const alreadyPinned = pinnedMessage?.[activeChat.id]?._id === mid;
+    socket.emit('pin_message', {groupId: activeChat.id, messageId: alreadyPinned ? null : mid}, res => {
+      if (res.success) {
+        setPinnedMessage(p => ({...p, [activeChat.id]: alreadyPinned ? null : msg}));
+      }
+    });
+    setMsgMenu(null);
+  };
+
   const fmtTime = ts=>{const d=new Date(ts),n=new Date();return d.toDateString()===n.toDateString()?d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):d.toLocaleDateString('ru-RU',{day:'numeric',month:'short'});};
   const fmtDur = s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
 
@@ -610,7 +722,7 @@ export default function WhisprPro() {
       </div>
 
       {/* ── SIDEBAR ── */}
-      <div className={`relative flex-shrink-0 w-72 flex flex-col transition-all duration-300 ${showSidebar?'translate-x-0':'w-0 -translate-x-72 overflow-hidden'}`}
+      <div className={`relative flex-shrink-0 flex flex-col transition-all duration-300 ${showSidebar?'w-72 translate-x-0':'w-0 -translate-x-72 overflow-hidden'} ${activeChat&&!showSidebar?'absolute z-10 h-full':''}`}
         style={{zIndex:2,borderRight:'1px solid rgba(255,255,255,0.05)',background:'rgba(255,255,255,0.02)'}}>
 
         {/* Profile */}
@@ -623,10 +735,16 @@ export default function WhisprPro() {
             </label>
             <div className="flex-1 min-w-0">
               <div className="text-white/80 font-semibold text-sm truncate">{currentUser?.displayName}</div>
-              <div className="text-white/25 text-xs truncate">@{currentUser?.username}</div>
+              <div className="flex items-center gap-1.5">
+                <button onClick={()=>handleSetStatus(myStatus==='online'?'away':myStatus==='away'?'dnd':'online')} className="flex items-center gap-1 hover:opacity-80 transition-opacity" title="Сменить статус">
+                  {myStatus==='online'&&<><span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0"></span><span className="text-[10px] text-white/25">онлайн</span></>}
+                  {myStatus==='away'&&<><Coffee className="w-3 h-3 text-yellow-400 flex-shrink-0"/><span className="text-[10px] text-white/25">отошёл</span></>}
+                  {myStatus==='dnd'&&<><BellOff className="w-3 h-3 text-red-400 flex-shrink-0"/><span className="text-[10px] text-white/25">не беспокоить</span></>}
+                </button>
+              </div>
             </div>
             <div className="flex gap-0.5 flex-shrink-0">
-              <button onClick={()=>{setShowSettings(true);setSettingsTab('account');setEditDisplayName(currentUser?.displayName||'');setEditUsername(currentUser?.username||'');setProfileError('');setProfileSuccess('');}} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors" title="Настройки"><Settings className="w-4 h-4 text-white/30 hover:text-white/60" /></button>
+              <button onClick={()=>{setShowSettings(true);setSettingsTab('account');setEditDisplayName(currentUser?.displayName||'');setEditUsername(currentUser?.username||'');setEditBio(currentUser?.bio||'');setProfileError('');setProfileSuccess('');}} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors" title="Настройки"><Settings className="w-4 h-4 text-white/30 hover:text-white/60" /></button>
               {currentUser?.isAdmin&&<button onClick={()=>{setShowAdminPanel(true);loadAdminData();}} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"><Shield className="w-4 h-4 text-white/30 hover:text-white/60" /></button>}
               <button onClick={handleLogout} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"><LogOut className="w-4 h-4 text-white/30 hover:text-white/60" /></button>
             </div>
@@ -659,6 +777,7 @@ export default function WhisprPro() {
                 <div className={`text-sm font-medium truncate ${activeChat?.type==='direct'&&activeChat.id===c.username?'text-white':'text-white/60'}`}>{c.displayName}</div>
                 <div className="text-xs text-white/20 truncate">@{c.username}</div>
               </div>
+              {(unreadCounts[c.username]||0)>0 && <span className="flex-shrink-0 min-w-[18px] h-[18px] rounded-full text-[10px] font-bold text-white flex items-center justify-center px-1" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{unreadCounts[c.username]}</span>}
               <button onClick={e=>{e.stopPropagation();handleRemoveContact(c.username);}} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-white/10 rounded-lg transition-all flex-shrink-0"><X className="w-3 h-3 text-white/30" /></button>
             </div>
           ))}
@@ -676,6 +795,7 @@ export default function WhisprPro() {
                 <div className={`text-sm font-medium truncate ${activeChat?.type==='group'&&activeChat.id===g._id?'text-white':'text-white/60'}`}>{g.name}</div>
                 <div className="text-xs text-white/20">{g.members.length} участников</div>
               </div>
+              {(unreadCounts[`group_${g._id}`]||0)>0 && <span className="flex-shrink-0 min-w-[18px] h-[18px] rounded-full text-[10px] font-bold text-white flex items-center justify-center px-1" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{unreadCounts[`group_${g._id}`]}</span>}
             </div>
           ))}
           {contacts.length===0&&groups.length===0&&<div className="text-center py-12 text-white/15 text-sm">Нажми «Поиск»<br/>чтобы найти людей</div>}
@@ -688,8 +808,8 @@ export default function WhisprPro() {
           <div style={{display:'flex',flexDirection:'column',height:'100%',opacity:chatVisible?1:0,transform:chatVisible?'none':'translateY(8px)',transition:'opacity 0.25s ease, transform 0.25s ease'}}>
             {/* Header */}
             <div className="flex-shrink-0 flex items-center gap-3 px-5 py-4" style={{borderBottom:'1px solid rgba(255,255,255,0.05)',background:'rgba(0,0,0,0.2)'}}>
-              <button onClick={()=>setShowSidebar(s=>!s)} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors flex-shrink-0"><Menu className="w-5 h-5 text-white/30" /></button>
-              {activeChat.type==='direct'?<Avatar username={activeChatData?.username} displayName={activeChatData?.displayName} avatar={avatars[activeChatData?.username]} size="md" online={activeChatData?.isOnline}/>:<GroupAvatar group={activeChatData} size="md"/>}
+              <button onClick={()=>setShowSidebar(s=>!s)} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors flex-shrink-0" title="Боковая панель"><Menu className="w-5 h-5 text-white/30 hover:text-white/60 transition-colors" /></button>
+              {activeChat.type==='direct'?<div className="cursor-pointer hover:opacity-80 transition-opacity" onClick={()=>handleViewProfile(activeChat.id)}><Avatar username={activeChatData?.username} displayName={activeChatData?.displayName} avatar={avatars[activeChatData?.username]} size="md" online={activeChatData?.isOnline}/></div>:<GroupAvatar group={activeChatData} size="md"/>}
               <div className="flex-1 min-w-0">
                 <div className="text-white/90 font-semibold truncate">{activeChat.type==='direct'?activeChatData?.displayName:activeChatData?.name}</div>
                 <div className="text-xs text-white/25">{activeChat.type==='direct'?(activeChatData?.isOnline?<span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"></span>онлайн</span>:'не в сети'):`${activeChatData?.members?.length||0} участников`}</div>
@@ -697,9 +817,49 @@ export default function WhisprPro() {
               {activeChat.type==='direct'&&activeChatData?.isOnline&&callState==='idle'&&(
                 <button onClick={()=>startCall(activeChat.id)} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0"><Phone className="w-5 h-5 text-white/30 hover:text-green-400 transition-colors" /></button>
               )}
+              <button onClick={()=>{setShowMsgSearch(s=>!s);setMsgSearchQuery('');setMsgSearchResults([]);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Поиск по сообщениям"><Search className="w-4 h-4 text-white/30 hover:text-white/60 transition-colors"/></button>
               {activeChat.type==='group'&&<button onClick={()=>setShowGroupInfo(true)} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0"><Settings className="w-4 h-4 text-white/30" /></button>}
             </div>
 
+            {/* Поиск по сообщениям */}
+            {showMsgSearch && (
+              <div className="flex-shrink-0 px-4 py-2" style={{borderBottom:'1px solid rgba(255,255,255,0.05)',background:'rgba(0,0,0,0.15)',animation:'fadeIn 0.2s ease'}}>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/25"/>
+                  <input autoFocus type="text" value={msgSearchQuery} onChange={e=>handleMsgSearch(e.target.value)}
+                    className="w-full pl-9 pr-4 py-2 rounded-xl text-white/80 text-sm outline-none placeholder-white/20"
+                    style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.07)'}}
+                    placeholder="Поиск по сообщениям..."/>
+                </div>
+                {msgSearchResults.length>0 && (
+                  <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
+                    {msgSearchResults.map(m=>(
+                      <div key={m._id} className="px-3 py-2 rounded-xl text-sm text-white/60 cursor-pointer hover:bg-white/5 transition-colors"
+                        style={{border:'1px solid rgba(255,255,255,0.05)'}}
+                        onClick={()=>{setShowMsgSearch(false);setMsgSearchQuery('');setMsgSearchResults([]);}}>
+                        <div className="truncate text-white/80">{m.text}</div>
+                        <div className="text-xs text-white/25 mt-0.5">{fmtTime(m.timestamp)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {msgSearchLoading && <div className="text-center py-2 text-white/25 text-xs">Поиск...</div>}
+                {!msgSearchLoading && msgSearchQuery.length>=2 && msgSearchResults.length===0 && <div className="text-center py-2 text-white/25 text-xs">Ничего не найдено</div>}
+              </div>
+            )}
+            {/* Закреплённое сообщение */}
+            {activeChat.type==='group' && pinnedMessage?.[activeChat.id] && (
+              <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2" style={{borderBottom:'1px solid rgba(255,255,255,0.05)',background:'rgba(255,255,255,0.02)',animation:'fadeIn 0.2s ease'}}>
+                <Pin className="w-3.5 h-3.5 text-white/25 flex-shrink-0"/>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] text-white/20 uppercase tracking-wider">Закреплено</div>
+                  <div className="text-sm text-white/60 truncate">{pinnedMessage[activeChat.id].text}</div>
+                </div>
+                {activeChatData?.admins?.includes(currentUser?.username) && (
+                  <button onClick={()=>handlePinMessage(pinnedMessage[activeChat.id])} className="p-1 hover:bg-white/5 rounded-lg transition-colors flex-shrink-0"><PinOff className="w-3.5 h-3.5 text-white/25"/></button>
+                )}
+              </div>
+            )}
             {/* Messages */}
             <div style={{flex:1,overflowY:'auto',padding:'1.25rem 1.5rem',display:'flex',flexDirection:'column',gap:'0.25rem'}}>
               {chatMessages.map((msg,idx)=>{
@@ -710,10 +870,10 @@ export default function WhisprPro() {
                 const isEditing=editingMsgId===mid;
                 return (
                   <div key={mid} className={`flex items-end gap-2 ${isOwn?'flex-row-reverse':'flex-row'}`}
-                    style={{animation:`msgIn 0.2s ease ${Math.min(idx,20)*0.015}s both`}}
+                    style={{animation:isOwn&&idx===chatMessages.length-1?'sendBubble 0.35s cubic-bezier(0.34,1.56,0.64,1) both':`msgIn 0.2s ease ${Math.min(idx,20)*0.015}s both`}}
                     onMouseEnter={()=>{clearTimeout(hoverTimeoutRef.current);setHoveredMsg(mid);}}
                     onMouseLeave={()=>{hoverTimeoutRef.current=setTimeout(()=>setHoveredMsg(null),300);}}>
-                    {!isOwn&&activeChat.type==='group'&&<Avatar username={msg.from} displayName={msg.from} avatar={avatars[msg.from]} size="sm"/>}
+                    {!isOwn&&activeChat.type==='group'&&<div className="cursor-pointer hover:opacity-80 transition-opacity" onClick={()=>handleViewProfile(msg.from)}><Avatar username={msg.from} displayName={msg.from} avatar={avatars[msg.from]} size="sm"/></div>}
                     <div className="relative max-w-sm">
                       {!isOwn&&activeChat.type==='group'&&<div className="text-xs text-white/25 mb-1 ml-1">{contacts.find(c=>c.username===msg.from)?.displayName||msg.from}</div>}
                       {hoveredMsg===mid&&!isEditing&&(
@@ -805,6 +965,11 @@ export default function WhisprPro() {
       {msgMenu&&(
         <div className="fixed z-50 rounded-xl overflow-hidden shadow-2xl w-44" style={{top:220,left:'50%',transform:'translateX(-50%)',background:'rgba(8,8,14,0.97)',border:'1px solid rgba(255,255,255,0.07)',animation:'popIn 0.15s ease'}} onClick={e=>e.stopPropagation()}>
           <button onClick={()=>{setForwardMsg(msgMenu.msg);setShowForwardModal(true);setMsgMenu(null);}} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><Forward className="w-4 h-4 text-blue-400"/>Переслать</button>
+          {activeChat?.type==='group'&&activeChatData?.admins?.includes(currentUser?.username)&&(
+            <button onClick={()=>handlePinMessage(msgMenu.msg)} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors">
+              <Pin className="w-4 h-4 text-purple-400"/>{pinnedMessage?.[activeChat?.id]?._id===(msgMenu.msg._id||msgMenu.msg.id)?'Открепить':'Закрепить'}
+            </button>
+          )}
           {msgMenu.isOwn&&msgMenu.msg.type!=='voice'&&<button onClick={()=>startEdit(msgMenu.msg)} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><Pencil className="w-4 h-4 text-yellow-400"/>Редактировать</button>}
           {msgMenu.isOwn&&<button onClick={()=>deleteMsg(msgMenu.msg,true)} className="w-full px-4 py-2.5 text-left text-red-400/80 text-sm hover:bg-red-500/5 flex items-center gap-3 transition-colors"><Trash2 className="w-4 h-4"/>Удалить у всех</button>}
           <button onClick={()=>deleteMsg(msgMenu.msg,false)} className="w-full px-4 py-2.5 text-left text-white/25 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><X className="w-4 h-4"/>Удалить у меня</button>
@@ -866,6 +1031,19 @@ export default function WhisprPro() {
                 </div>
                 {profileError&&<div className="text-red-300 text-sm px-3 py-2 rounded-lg" style={{background:'rgba(239,68,68,0.1)'}}>{profileError}</div>}
                 {profileSuccess&&<div className="text-green-300 text-sm px-3 py-2 rounded-lg" style={{background:'rgba(34,197,94,0.1)'}}>{profileSuccess}</div>}
+                {/* Bio */}
+                <div>
+                  <label className="text-white/30 text-xs uppercase tracking-widest mb-1.5 block">Bio</label>
+                  <textarea value={editBio} onChange={e=>setEditBio(e.target.value.slice(0,200))}
+                    className="w-full px-4 py-3 rounded-xl text-white/80 text-sm outline-none placeholder-white/20 resize-none"
+                    style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)'}}
+                    placeholder="Расскажи о себе..." rows={2} maxLength={200}/>
+                </div>
+                {/* Скрыть онлайн */}
+                <label className="flex items-center justify-between px-4 py-3 rounded-xl cursor-pointer" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)'}}>
+                  <div className="flex items-center gap-3"><Eye className="w-4 h-4 text-white/30"/><span className="text-white/60 text-sm">Скрыть статус «онлайн»</span></div>
+                  <input type="checkbox" checked={currentUser?.hideOnline||false} onChange={e=>socket.emit('update_profile',{hideOnline:e.target.checked},res=>{if(res.success)setCurrentUser(p=>({...p,hideOnline:e.target.checked}));})} className="w-4 h-4"/>
+                </label>
                 <button onClick={handleSaveProfile} disabled={savingProfile}
                   className="w-full py-3 rounded-xl text-white font-semibold text-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
                   style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
@@ -990,6 +1168,60 @@ export default function WhisprPro() {
         </Modal>
       )}
 
+      {/* ══ ПРОСМОТР ПРОФИЛЯ ══ */}
+      {viewingProfile && (
+        <Modal onClose={()=>setViewingProfile(null)}>
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-white/70 font-semibold flex items-center gap-2"><Info className="w-4 h-4"/>Профиль</h3>
+              <button onClick={()=>setViewingProfile(null)} className="p-1.5 rounded-lg hover:bg-white/5"><X className="w-4 h-4 text-white/30"/></button>
+            </div>
+            {/* Аватар + имя */}
+            <div className="flex flex-col items-center mb-6">
+              <Avatar username={viewingProfile.username} displayName={viewingProfile.displayName} avatar={viewingProfile.avatar} size="lg"/>
+              <div className="mt-3 text-center">
+                <div className="text-white font-bold text-xl">{viewingProfile.displayName}</div>
+                <div className="text-white/30 text-sm">@{viewingProfile.username}</div>
+                <div className="flex items-center justify-center gap-1.5 mt-1.5">
+                  {viewingProfile.status==='online'&&<><span className="w-2 h-2 rounded-full bg-green-400"></span><span className="text-green-400 text-xs">онлайн</span></>}
+                  {viewingProfile.status==='away'&&<><Coffee className="w-3.5 h-3.5 text-yellow-400"/><span className="text-yellow-400 text-xs">отошёл</span></>}
+                  {viewingProfile.status==='dnd'&&<><BellOff className="w-3.5 h-3.5 text-red-400"/><span className="text-red-400 text-xs">не беспокоить</span></>}
+                  {viewingProfile.status==='offline'&&<><span className="w-2 h-2 rounded-full bg-gray-600"></span><span className="text-white/25 text-xs">не в сети</span></>}
+                  {viewingProfile.status==='hidden'&&<><EyeOff className="w-3.5 h-3.5 text-white/25"/><span className="text-white/25 text-xs">скрыт</span></>}
+                </div>
+              </div>
+            </div>
+            {/* Bio */}
+            {viewingProfile.bio && (
+              <div className="mb-4 px-4 py-3 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+                <div className="text-[10px] text-white/20 uppercase tracking-widest mb-1">О себе</div>
+                <div className="text-white/70 text-sm leading-relaxed">{viewingProfile.bio}</div>
+              </div>
+            )}
+            {/* Дата регистрации */}
+            <div className="px-4 py-3 rounded-xl mb-4" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+              <div className="text-[10px] text-white/20 uppercase tracking-widest mb-1">В Whispr с</div>
+              <div className="text-white/50 text-sm flex items-center gap-2"><Clock className="w-3.5 h-3.5"/>{new Date(viewingProfile.createdAt).toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}</div>
+            </div>
+            {/* Действия */}
+            {viewingProfile.username !== currentUser?.username && (
+              <div className="flex gap-2">
+                <button onClick={()=>{setViewingProfile(null);const contact=contacts.find(c=>c.username===viewingProfile.username);if(contact)openDirectChat(contact);}}
+                  className="flex-1 py-2.5 rounded-xl text-white text-sm font-medium flex items-center justify-center gap-2 transition-all hover:opacity-90"
+                  style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
+                  <MessageSquare className="w-4 h-4"/>Написать
+                </button>
+                <button onClick={()=>handleBlockUser(viewingProfile.username, !contacts.find(c=>c.username===viewingProfile.username)?.isBlockedByMe)}
+                  className="px-4 py-2.5 rounded-xl text-red-400/70 text-sm flex items-center gap-2 hover:bg-red-500/8 transition-colors"
+                  style={{border:'1px solid rgba(239,68,68,0.15)'}}>
+                  <Ban className="w-4 h-4"/>
+                </button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
       {/* ══ CALLS ══ */}
       {callState==='incoming'&&<IncomingCallOverlay from={callPeer} fromDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} fromAvatar={avatars[callPeer]} onAccept={acceptCall} onReject={rejectCall}/>}
       {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} audioRef={remoteAudioRef} remoteStream={remoteStreamRef.current}/>}
@@ -1008,6 +1240,7 @@ const CSS = `
   @keyframes popIn { from{opacity:0;transform:scale(0.88)} to{opacity:1;transform:scale(1)} }
   @keyframes listItem { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
   @keyframes msgIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes sendBubble { 0%{opacity:0;transform:translateY(12px) scale(0.9)} 60%{transform:translateY(-3px) scale(1.02)} 100%{opacity:1;transform:translateY(0) scale(1)} }
   ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:4px}
   input::placeholder{transition:opacity 0.2s} input:focus::placeholder{opacity:0.4}
 `;
