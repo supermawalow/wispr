@@ -412,6 +412,66 @@ io.on('connection', (socket) => {
     } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
   });
 
+  // ── ОБНОВИТЬ ПРОФИЛЬ (ник, юзернейм, аватар) ──
+  socket.on('update_profile', async (data, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      const { displayName, newUsername, avatar } = data;
+      const user = await User.findOne({ username: me });
+      if (!user) return cb({ success: false, error: 'Пользователь не найден' });
+
+      // Смена юзернейма
+      if (newUsername && newUsername.toLowerCase() !== me) {
+        const taken = await User.findOne({ username: newUsername.toLowerCase() });
+        if (taken) return cb({ success: false, error: 'Username уже занят' });
+        if (!/^[a-z0-9_]{3,20}$/.test(newUsername.toLowerCase()))
+          return cb({ success: false, error: 'Username: 3-20 символов, только буквы/цифры/_' });
+
+        const oldUsername = me;
+        const nu = newUsername.toLowerCase();
+
+        // Обновляем само имя пользователя
+        user.username = nu;
+
+        // Обновляем контакты у других пользователей
+        await User.updateMany({ contacts: oldUsername }, { $set: { 'contacts.$': nu } });
+
+        // Обновляем сообщения
+        await Message.updateMany({ from: oldUsername }, { from: nu });
+        await Message.updateMany({ to: oldUsername }, { to: nu });
+        await Message.updateMany({}, { $set: { chatId: undefined } }); // пересчитаем ниже
+
+        // Пересчёт chatId для всех личных сообщений
+        const msgs = await Message.find({ chatType: 'direct', $or: [{ from: nu }, { to: nu }] });
+        for (const msg of msgs) {
+          msg.chatId = [msg.from, msg.to].sort().join('_');
+          await msg.save();
+        }
+
+        // Обновляем группы
+        await Group.updateMany({ members: oldUsername }, { $set: { 'members.$': nu } });
+        await Group.updateMany({ admins: oldUsername }, { $set: { 'admins.$': nu } });
+        await Group.updateMany({ owner: oldUsername }, { owner: nu });
+
+        // Обновляем маппинги сокетов
+        onlineUsers.set(socket.id, nu);
+        userSockets.delete(oldUsername);
+        userSockets.set(nu, socket.id);
+      }
+
+      if (displayName) user.displayName = displayName.trim();
+      if (avatar !== undefined) user.avatar = avatar;
+      await user.save();
+
+      if (avatar !== undefined) io.emit('avatar_updated', { username: user.username, avatar });
+
+      const updatedUser = user.toObject();
+      delete updatedUser.password;
+      cb({ success: true, user: updatedUser });
+    } catch (e) { console.error(e); cb({ success: false, error: 'Ошибка сервера' }); }
+  });
+
   // ══════════════════════════════════════════
   //  АДМИН
   // ══════════════════════════════════════════
