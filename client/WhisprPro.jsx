@@ -116,7 +116,7 @@ function LogoText({ size = 'xl', sub = false }) {
           letterSpacing="-3"
         >Whispr</text>
       </svg>
-      {sub && <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: 11, letterSpacing: '0.35em', marginTop: -4, textTransform: 'uppercase' }}>Messenger</div>}
+      {sub && <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: 11, letterSpacing: '0.35em', paddingTop: 8, textTransform: 'uppercase', fontWeight: 400 }}>MESSENGER</div>}
     </div>
   );
 }
@@ -181,7 +181,14 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
   const fmt = s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
   const localRef = useRef(null);
   const resolved = audioRef||localRef;
-  useEffect(() => { if (resolved.current&&remoteStream) { resolved.current.srcObject=remoteStream; resolved.current.play().catch(()=>{}); } }, [remoteStream]);
+  useEffect(() => {
+    if (!remoteStream) return;
+    const el = resolved.current;
+    if (!el) return;
+    el.srcObject = remoteStream;
+    const tryPlay = () => el.play().catch(err => { console.warn('overlay play err', err); setTimeout(tryPlay, 800); });
+    tryPlay();
+  }, [remoteStream]);
   return (
     <div className="fixed inset-0 flex items-center justify-center z-[200]" style={{background:'rgba(0,0,0,0.85)',backdropFilter:'blur(20px)',animation:'fadeIn 0.2s ease'}}>
       <div className="rounded-3xl p-10 text-center w-80 shadow-2xl" style={{background:'#111116',border:'1px solid rgba(255,255,255,0.08)'}}>
@@ -203,10 +210,13 @@ export default function WhisprPro() {
   const socketRef = useRef(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
-  const [authPage, setAuthPage] = useState(false); // для fade анимации
+  const [authPage, setAuthPage] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [autoLoginDone, setAutoLoginDone] = useState(false);
+  const [autoLoginLoading, setAutoLoginLoading] = useState(()=>{try{return !!localStorage.getItem('whispr_creds');}catch{return false;}});
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const savedCredsRef = useRef(null);
   const [displayName, setDisplayName] = useState('');
   const [authError, setAuthError] = useState('');
 
@@ -257,6 +267,7 @@ export default function WhisprPro() {
   const callTimerRef = useRef(null);
   const callPeerRef = useRef(null);
   const incomingOfferRef = useRef(null);
+  const pendingIceCandidatesRef = useRef([]);
 
   // Админ
   const [showAdminPanel, setShowAdminPanel] = useState(false);
@@ -283,12 +294,17 @@ export default function WhisprPro() {
 
   const T = THEMES[theme] || THEMES.violet;
   const getChatKey = c => c?(c.type==='group'?`group_${c.id}`:c.id):null;
-  const ICE = { iceServers: [
-    {urls:'stun:stun.l.google.com:19302'},
-    {urls:'stun:stun1.l.google.com:19302'},
-    {urls:'stun:stun2.l.google.com:19302'},
-    {urls:'stun:stun3.l.google.com:19302'},
-  ]};
+  const ICE = {
+    iceServers: [
+      {urls:'stun:stun.l.google.com:19302'},
+      {urls:'stun:stun1.l.google.com:19302'},
+      {urls:'stun:stun2.l.google.com:19302'},
+      {urls:'stun:stun3.l.google.com:19302'},
+      {urls:'stun:stun4.l.google.com:19302'},
+      {urls:'stun:stun.cloudflare.com:3478'},
+    ],
+    iceCandidatePoolSize: 10,
+  };
 
   useEffect(() => { try { localStorage.setItem('whispr_theme',theme); } catch {} }, [theme]);
 
@@ -297,6 +313,7 @@ export default function WhisprPro() {
     if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t=>t.stop()); localStreamRef.current=null; }
     clearInterval(callTimerRef.current);
     remoteStreamRef.current=null;
+    pendingIceCandidatesRef.current=[];
     const a=remoteAudioRef.current; if(a) a.srcObject=null;
     setCallState('idle'); setCallPeer(null); setCallDuration(0); setCallMuted(false);
     callPeerRef.current=null; incomingOfferRef.current=null;
@@ -309,7 +326,14 @@ export default function WhisprPro() {
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
       stream.getTracks().forEach(t=>pc.addTrack(t,stream));
-      pc.ontrack = e => { const s=e.streams?.[0]||new MediaStream([e.track]); remoteStreamRef.current=s; const a=remoteAudioRef.current; if(a){a.srcObject=s;a.play().catch(()=>{});} };
+      pc.ontrack = e => {
+        console.log('📞 caller ontrack', e.track.kind, e.streams.length);
+        const s = e.streams?.[0] || new MediaStream([e.track]);
+        remoteStreamRef.current = s;
+        // Try audio element
+        const tryPlay = () => { const a=remoteAudioRef.current||document.getElementById('remoteAudio'); if(a){a.srcObject=s;a.play().catch(err=>console.warn('play err',err));} };
+        tryPlay(); setTimeout(tryPlay, 500); setTimeout(tryPlay, 1500);
+      };
       pc.onicecandidate = e => { if(e.candidate) socketRef.current?.emit('ice_candidate',{to:toUsername,candidate:e.candidate}); };
       pc.onconnectionstatechange = () => { if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); };
       const offer = await pc.createOffer({offerToReceiveAudio:true});
@@ -326,10 +350,21 @@ export default function WhisprPro() {
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current=pc;
       stream.getTracks().forEach(t=>pc.addTrack(t,stream));
-      pc.ontrack = e => { const s=e.streams?.[0]||new MediaStream([e.track]); remoteStreamRef.current=s; const a=remoteAudioRef.current; if(a){a.srcObject=s;a.play().catch(()=>{});} };
+      pc.ontrack = e => {
+        console.log('📞 callee ontrack', e.track.kind, e.streams.length);
+        const s = e.streams?.[0] || new MediaStream([e.track]);
+        remoteStreamRef.current = s;
+        const tryPlay = () => { const a=remoteAudioRef.current||document.getElementById('remoteAudio'); if(a){a.srcObject=s;a.play().catch(err=>console.warn('play err',err));} };
+        tryPlay(); setTimeout(tryPlay, 500); setTimeout(tryPlay, 1500);
+      };
       pc.onicecandidate = e => { if(e.candidate) socketRef.current?.emit('ice_candidate',{to:callPeerRef.current,candidate:e.candidate}); };
       pc.onconnectionstatechange = () => { if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); };
+      // IMPORTANT: setRemoteDescription THEN addTracks order matters
       await pc.setRemoteDescription(new RTCSessionDescription(incomingOfferRef.current));
+      // flush pending ICE candidates buffered before remoteDescription was set
+      const pending = [...pendingIceCandidatesRef.current];
+      pendingIceCandidatesRef.current=[];
+      for(const cand of pending){try{await pc.addIceCandidate(new RTCIceCandidate(cand));}catch(e){console.warn('pending ICE err',e);}}
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       socketRef.current?.emit('call_answer',{to:callPeerRef.current,answer});
@@ -358,8 +393,8 @@ export default function WhisprPro() {
     s.on('reaction_updated', ({messageId,reactions}) => setMessages(p=>{const u={...p};for(const k of Object.keys(u))u[k]=u[k].map(m=>(m._id===messageId||m.id===messageId)?{...m,reactions}:m);return u;}));
     s.on('avatar_updated', ({username,avatar}) => setAvatars(p=>({...p,[username]:avatar})));
     s.on('incoming_call', ({from,offer}) => { callPeerRef.current=from; incomingOfferRef.current=offer; setCallPeer(from); setCallState('incoming'); });
-    s.on('call_answered', async({answer}) => { try{await peerConnectionRef.current?.setRemoteDescription(new RTCSessionDescription(answer));setCallState('active');callTimerRef.current=setInterval(()=>setCallDuration(d=>d+1),1000);}catch{} });
-    s.on('ice_candidate', async({candidate}) => { try{if(peerConnectionRef.current?.remoteDescription)await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));}catch{} });
+    s.on('call_answered', async({answer}) => { try{ const pc=peerConnectionRef.current; if(!pc)return; await pc.setRemoteDescription(new RTCSessionDescription(answer)); // flush pending for(const c of pendingIceCandidatesRef.current){try{await pc.addIceCandidate(new RTCIceCandidate(c));}catch{}} pendingIceCandidatesRef.current=[]; setCallState('active');callTimerRef.current=setInterval(()=>setCallDuration(d=>d+1),1000);}catch(e){console.error('call_answered err',e);} });
+    s.on('ice_candidate', async({candidate}) => { try{ const pc=peerConnectionRef.current; if(pc&&pc.remoteDescription&&pc.remoteDescription.type){ await pc.addIceCandidate(new RTCIceCandidate(candidate)); } else { pendingIceCandidatesRef.current.push(candidate); } }catch(e){console.warn('ICE error',e);} });
     s.on('call_ended', ()=>cleanupCall());
     s.on('call_rejected', ()=>{alert('Звонок отклонён');cleanupCall();});
     s.on('call_failed', ({reason})=>{alert(reason);cleanupCall();});
@@ -368,6 +403,27 @@ export default function WhisprPro() {
   }, []);
 
   useEffect(()=>{currentUserRef.current=currentUser;},[currentUser]);
+
+  // Auto-login from saved creds
+  useEffect(()=>{
+    if(!socket||autoLoginDone)return;
+    setAutoLoginDone(true);
+    try{
+      const saved=localStorage.getItem('whispr_creds');
+      if(!saved)return;
+      const {u,p}=JSON.parse(saved);
+      if(!u||!p)return;
+      savedCredsRef.current={u,p};
+      socket.emit('login',{username:u,password:p},res=>{
+        if(res.success){
+          setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);
+          const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;
+          setAvatars(av);setUsername(u);setPassword(p);setIsAuthenticated(true);
+        } else { localStorage.removeItem('whispr_creds'); }
+        setAutoLoginLoading(false);
+      });
+    }catch{localStorage.removeItem('whispr_creds');setAutoLoginLoading(false);}
+  },[socket,autoLoginDone]);
 
   const chatKey = getChatKey(activeChat);
   const chatMessages = chatKey?(messages[chatKey]||[]):[];
@@ -379,8 +435,8 @@ export default function WhisprPro() {
   useEffect(()=>{if(activeChat){setChatVisible(false);setTimeout(()=>setChatVisible(true),50);}},[activeChat?.id]);
 
   const handleRegister = e => { e.preventDefault();setAuthError('');socket.emit('register',{username,displayName,password},res=>{if(res.success)handleLogin(e);else setAuthError(res.error);}); };
-  const handleLogin = e => { e.preventDefault();setAuthError('');socket.emit('login',{username,password},res=>{if(res.success){setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
-  const handleLogout = () => { cleanupCall();setIsAuthenticated(false);setCurrentUser(null);setContacts([]);setGroups([]);setActiveChat(null);setMessages({});setUsername('');setPassword('');setDisplayName(''); };
+  const handleLogin = e => { e.preventDefault();setAuthError('');socket.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch{}setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
+  const handleLogout = () => { cleanupCall();try{localStorage.removeItem('whispr_creds');}catch{}setIsAuthenticated(false);setCurrentUser(null);setContacts([]);setGroups([]);setActiveChat(null);setMessages({});setUsername('');setPassword('');setDisplayName(''); };
 
   const handleAvatarUpload = (e, fromSettings=false) => {
     const f=e.target.files[0]; if(!f)return;
@@ -407,13 +463,16 @@ export default function WhisprPro() {
     if(editDisplayName.trim()&&editDisplayName.trim()!==currentUser.displayName)data.displayName=editDisplayName.trim();
     if(editUsername.trim()&&editUsername.trim()!==currentUser.username)data.newUsername=editUsername.trim();
     if(!Object.keys(data).length){setSavingProfile(false);setProfileSuccess('Нечего менять');return;}
+    const currentPassword = savedCredsRef.current?.p || password || (()=>{try{const s=localStorage.getItem('whispr_creds');return s?JSON.parse(s).p:'';}catch{return '';}})();
     socket.emit('update_profile',data,res=>{
       setSavingProfile(false);
       if(res.success){
         setCurrentUser(res.user);
         if(res.user.username!==currentUser.username){
           setActiveChat(null);setMessages({});setContacts([]);
-          socket.emit('login',{username:res.user.username,password},r2=>{if(r2.success){setContacts(r2.contacts||[]);setGroups(r2.groups||[]);}});
+          const savedP=savedCredsRef.current?.p||password||currentPassword;
+          try{localStorage.setItem('whispr_creds',JSON.stringify({u:res.user.username,p:savedP}));}catch{}
+          socket.emit('login',{username:res.user.username,password:savedP},r2=>{if(r2.success){setContacts(r2.contacts||[]);setGroups(r2.groups||[]);}});
         }
         setProfileSuccess('Профиль обновлён!');
         setEditUsername(res.user.username);
@@ -453,6 +512,16 @@ export default function WhisprPro() {
   // ══════════════════════════════════════════
   //  AUTH SCREEN
   // ══════════════════════════════════════════
+  if (autoLoginLoading) return (
+    <div style={{height:'100dvh',display:'flex',alignItems:'center',justifyContent:'center',background:'#0a0a0e'}}>
+      <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:16}}>
+        <LogoText size="md" />
+        <div style={{width:32,height:32,border:'2px solid rgba(255,255,255,0.1)',borderTop:'2px solid rgba(255,255,255,0.5)',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}></div>
+      </div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+
   if (!isAuthenticated) return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
       style={{background:`linear-gradient(135deg, ${T.a} 0%, ${T.b} 50%, ${T.c} 100%)`}}>
@@ -648,7 +717,7 @@ export default function WhisprPro() {
                               <Mic className="w-3 h-3 text-white/30 flex-shrink-0"/>
                             </div>
                           ):(
-                            <div className="text-sm leading-relaxed break-words text-white/88">{msg.text}</div>
+                            <div style={{color:"rgba(255,255,255,0.92)",fontSize:"14px",lineHeight:"1.5",wordBreak:"word-break"}}>{msg.text}</div>
                           )}
                           <div className="flex items-center justify-end gap-1 mt-0.5">
                             {msg.edited&&<span className="text-[10px] text-white/25">ред.</span>}
