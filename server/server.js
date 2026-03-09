@@ -55,7 +55,10 @@ const messageSchema = new mongoose.Schema({
   timestamp: { type: Date, default: Date.now },
   delivered: { type: Boolean, default: false },
   read:      { type: Boolean, default: false },
-  reactions: { type: Map, of: [String], default: {} }
+  reactions:     { type: Map, of: [String], default: {} },
+  edited:        { type: Boolean, default: false },
+  forwarded:     { type: Boolean, default: false },
+  forwardedFrom: { type: String, default: null }
 });
 
 const adminLogSchema = new mongoose.Schema({
@@ -507,6 +510,132 @@ io.on('connection', (socket) => {
     } catch (e) { cb({ success: false, error: 'Ошибка' }); }
   });
 
+
+  // ── РЕДАКТИРОВАТЬ СООБЩЕНИЕ ──
+  socket.on('edit_message', async (data, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      const { messageId, newText } = data;
+      const msg = await Message.findById(messageId);
+      if (!msg) return cb({ success: false, error: 'Сообщение не найдено' });
+      if (msg.from !== me) return cb({ success: false, error: 'Нет прав' });
+      if (!newText?.trim()) return cb({ success: false, error: 'Текст пустой' });
+      msg.text = newText.trim();
+      msg.edited = true;
+      await msg.save();
+      const update = { messageId, newText: msg.text, edited: true };
+      if (msg.chatType === 'group') {
+        const group = await Group.findById(msg.groupId);
+        if (group) group.members.forEach(m => { const s = userSockets.get(m); if (s) io.to(s).emit('message_edited', update); });
+      } else {
+        socket.emit('message_edited', update);
+        const other = userSockets.get(msg.to === me ? msg.from : msg.to);
+        if (other) io.to(other).emit('message_edited', update);
+      }
+      cb({ success: true });
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  // ── УДАЛИТЬ СООБЩЕНИЕ ──
+  socket.on('delete_message', async (data, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      const { messageId, deleteFor } = data; // deleteFor: 'me' | 'all'
+      const msg = await Message.findById(messageId);
+      if (!msg) return cb({ success: false, error: 'Сообщение не найдено' });
+      if (deleteFor === 'all' && msg.from !== me) return cb({ success: false, error: 'Нет прав' });
+      if (deleteFor === 'all') {
+        await Message.deleteOne({ _id: messageId });
+        const update = { messageId };
+        if (msg.chatType === 'group') {
+          const group = await Group.findById(msg.groupId);
+          if (group) group.members.forEach(m => { const s = userSockets.get(m); if (s) io.to(s).emit('message_deleted', update); });
+        } else {
+          socket.emit('message_deleted', update);
+          const other = userSockets.get(msg.to === me ? msg.from : msg.to);
+          if (other) io.to(other).emit('message_deleted', update);
+        }
+      } else {
+        socket.emit('message_deleted', { messageId });
+      }
+      cb({ success: true });
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  // ── ПЕРЕСЛАТЬ СООБЩЕНИЕ ──
+  socket.on('forward_message', async (data, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      const { messageId, toUsername } = data;
+      const original = await Message.findById(messageId);
+      if (!original) return cb({ success: false, error: 'Сообщение не найдено' });
+      const recipientSocket = userSockets.get(toUsername.toLowerCase());
+      const msg = await Message.create({
+        chatId: getChatId(me, toUsername.toLowerCase()), chatType: 'direct',
+        from: me, to: toUsername.toLowerCase(),
+        text: original.text, type: original.type, audioData: original.audioData,
+        forwarded: true, forwardedFrom: original.from,
+        delivered: !!recipientSocket, read: false
+      });
+      socket.emit('new_message', msg);
+      if (recipientSocket) io.to(recipientSocket).emit('new_message', msg);
+      cb({ success: true, message: msg });
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  // ══════════════════════════════════════════
+  //  АУДИО ЗВОНКИ (WebRTC сигнализация)
+  // ══════════════════════════════════════════
+
+  // Инициатор -> вызываемый
+  socket.on('call_offer', (data) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return;
+    const { to, offer } = data;
+    const s = userSockets.get(to.toLowerCase());
+    if (s) io.to(s).emit('incoming_call', { from: me, offer });
+    else socket.emit('call_failed', { reason: 'Пользователь не в сети' });
+  });
+
+  // Вызываемый принял -> отправляем answer инициатору
+  socket.on('call_answer', (data) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return;
+    const { to, answer } = data;
+    const s = userSockets.get(to.toLowerCase());
+    if (s) io.to(s).emit('call_answered', { from: me, answer });
+  });
+
+  // ICE кандидаты
+  socket.on('ice_candidate', (data) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return;
+    const { to, candidate } = data;
+    const s = userSockets.get(to.toLowerCase());
+    if (s) io.to(s).emit('ice_candidate', { from: me, candidate });
+  });
+
+  // Завершить звонок
+  socket.on('call_end', (data) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return;
+    const { to } = data;
+    const s = userSockets.get(to.toLowerCase());
+    if (s) io.to(s).emit('call_ended', { from: me });
+  });
+
+  // Отклонить звонок
+  socket.on('call_reject', (data) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return;
+    const { to } = data;
+    const s = userSockets.get(to.toLowerCase());
+    if (s) io.to(s).emit('call_rejected', { from: me });
+  });
+
   // ── ОТКЛЮЧЕНИЕ ──
   socket.on('disconnect', () => {
     const username = onlineUsers.get(socket.id);
@@ -536,3 +665,7 @@ app.get('/health', async (req, res) => {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => console.log(`🚀 Whispr Server v3 on port ${PORT}`));
 process.on('SIGTERM', () => server.close(() => process.exit(0)));
+
+// ══════════════════════════════════════════
+// ПАТЧ v4: редактирование, удаление, пересылка, звонки
+// ══════════════════════════════════════════
