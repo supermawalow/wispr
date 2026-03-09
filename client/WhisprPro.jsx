@@ -324,7 +324,13 @@ export default function WhisprPro() {
 
   const startCall = useCallback(async (toUsername) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+      const stream = await navigator.mediaDevices.getUserMedia({audio:{
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 48000,
+        channelCount: 1,
+      },video:false});
       localStreamRef.current = stream;
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
@@ -348,7 +354,13 @@ export default function WhisprPro() {
 
   const acceptCall = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+      const stream = await navigator.mediaDevices.getUserMedia({audio:{
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 48000,
+        channelCount: 1,
+      },video:false});
       localStreamRef.current=stream;
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current=pc;
@@ -508,7 +520,7 @@ export default function WhisprPro() {
   const submitEdit = e=>{e.preventDefault();if(!editText.trim())return;socket.emit('edit_message',{messageId:editingMsgId,newText:editText.trim()},res=>{if(res.success){setEditingMsgId(null);setEditText('');}});};
   const deleteMsg = (msg,forAll)=>{socket.emit('delete_message',{messageId:msg._id||msg.id,deleteFor:forAll?'all':'me'},()=>{});setMsgMenu(null);};
   const submitForward = to=>{socket.emit('forward_message',{messageId:forwardMsg._id||forwardMsg.id,toUsername:to},res=>{if(res.success){setShowForwardModal(false);setForwardMsg(null);const c=contacts.find(x=>x.username===to);if(c)openDirectChat(c);}});};
-  const startRecording = async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:true});const mr=new MediaRecorder(stream);mediaRecorderRef.current=mr;audioChunksRef.current=[];mr.ondataavailable=e=>audioChunksRef.current.push(e.data);mr.onstop=()=>{const blob=new Blob(audioChunksRef.current,{type:'audio/webm'});const r=new FileReader();r.onloadend=()=>{if(activeChat.type==='direct')socket.emit('send_message',{to:activeChat.id,text:'',type:'voice',audioData:r.result},()=>{});else socket.emit('send_group_message',{groupId:activeChat.id,text:'',type:'voice',audioData:r.result},()=>{});};r.readAsDataURL(blob);stream.getTracks().forEach(t=>t.stop());};mr.start();setIsRecording(true);setRecordingTime(0);recordingTimerRef.current=setInterval(()=>setRecordingTime(t=>t+1),1000);}catch{alert('Нет доступа к микрофону');}};
+  const startRecording = async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});const mr=new MediaRecorder(stream);mediaRecorderRef.current=mr;audioChunksRef.current=[];mr.ondataavailable=e=>audioChunksRef.current.push(e.data);mr.onstop=()=>{const blob=new Blob(audioChunksRef.current,{type:'audio/webm'});const r=new FileReader();r.onloadend=()=>{if(activeChat.type==='direct')socket.emit('send_message',{to:activeChat.id,text:'',type:'voice',audioData:r.result},()=>{});else socket.emit('send_group_message',{groupId:activeChat.id,text:'',type:'voice',audioData:r.result},()=>{});};r.readAsDataURL(blob);stream.getTracks().forEach(t=>t.stop());};mr.start();setIsRecording(true);setRecordingTime(0);recordingTimerRef.current=setInterval(()=>setRecordingTime(t=>t+1),1000);}catch{alert('Нет доступа к микрофону');}};
   const stopRecording = ()=>{mediaRecorderRef.current?.stop();clearInterval(recordingTimerRef.current);setIsRecording(false);setRecordingTime(0);};
   const toggleAudio = (id,data)=>{if(playingAudio===id){setPlayingAudio(null);return;}setPlayingAudio(id);const a=new Audio(data);a.onended=()=>setPlayingAudio(null);a.play();};
   const handleReaction = (mid,emoji)=>{socket.emit('add_reaction',{messageId:mid,emoji},()=>{});setHoveredMsg(null);};
