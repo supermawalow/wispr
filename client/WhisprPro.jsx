@@ -518,7 +518,6 @@ export default function WhisprPro() {
         <LogoText size="md" />
         <div style={{width:32,height:32,border:'2px solid rgba(255,255,255,0.1)',borderTop:'2px solid rgba(255,255,255,0.5)',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}></div>
       </div>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 
@@ -974,6 +973,7 @@ export default function WhisprPro() {
 }
 
 const CSS = `
+  @keyframes spin { to{transform:rotate(360deg)} }
   @keyframes fadeIn { from{opacity:0} to{opacity:1} }
   @keyframes slideUp { from{opacity:0;transform:translateY(20px) scale(0.97)} to{opacity:1;transform:translateY(0) scale(1)} }
   @keyframes logoEntrance { from{opacity:0;transform:translateY(-16px) scale(0.92)} to{opacity:1;transform:translateY(0) scale(1)} }
