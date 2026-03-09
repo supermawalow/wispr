@@ -47,6 +47,7 @@ export default function WhisprPro() {
 
   // Реакции
   const [hoveredMsg, setHoveredMsg] = useState(null);
+  const hoverTimeoutRef = useRef(null);
 
   // Воспроизведение аудио
   const [playingAudio, setPlayingAudio] = useState(null);
@@ -442,13 +443,15 @@ export default function WhisprPro() {
                 return (
                   <div key={msgId}
                     className={`flex ${isOwn ? 'justify-end' : 'justify-start'} group`}
-                    onMouseEnter={() => setHoveredMsg(msgId)}
-                    onMouseLeave={() => setHoveredMsg(null)}>
+                    onMouseEnter={() => { clearTimeout(hoverTimeoutRef.current); setHoveredMsg(msgId); }}
+                    onMouseLeave={() => { hoverTimeoutRef.current = setTimeout(() => setHoveredMsg(null), 300); }}>
 
                     <div className="relative max-w-md">
                       {/* Панель реакций при наведении */}
                       {hoveredMsg === msgId && (
-                        <div className={`absolute ${isOwn ? 'right-0' : 'left-0'} -top-10 flex gap-1 bg-black/60 backdrop-blur-xl rounded-2xl px-2 py-1 z-10 shadow-xl`}>
+                        <div className={`absolute ${isOwn ? 'right-0' : 'left-0'} -top-10 flex gap-1 bg-black/60 backdrop-blur-xl rounded-2xl px-2 py-1 z-10 shadow-xl`}
+                          onMouseEnter={() => { clearTimeout(hoverTimeoutRef.current); setHoveredMsg(msgId); }}
+                          onMouseLeave={() => { hoverTimeoutRef.current = setTimeout(() => setHoveredMsg(null), 300); }}>
                           {EMOJI_LIST.map(emoji => (
                             <button key={emoji} onClick={() => handleReaction(msgId, emoji)}
                               className="text-lg hover:scale-125 transition-transform">
