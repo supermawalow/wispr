@@ -92,9 +92,11 @@ function WhisprLogo({ size = 'xl', theme }) {
 function LogoText({ size = 'xl', sub = false }) {
   const sizes = { sm: 36, md: 52, xl: 96 };
   const fs = sizes[size] || 96;
+  const W = fs * 4.8;
+  const H = fs * 1.25;
   return (
-    <div style={{ position: 'relative', display: 'inline-block' }}>
-      <svg width={fs * 4.5} height={fs * 1.2} viewBox={`0 0 ${fs * 4.5} ${fs * 1.2}`} style={{ overflow: 'visible', display: 'block' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ overflow: 'visible', display: 'block' }}>
         <defs>
           <linearGradient id="logo-grad" x1="0%" y1="0%" x2="0%" y2="100%">
             <stop offset="0%" stopColor="rgba(255,255,255,1)" />
@@ -107,16 +109,17 @@ function LogoText({ size = 'xl', sub = false }) {
           </filter>
         </defs>
         <text
-          x="0" y={fs * 0.95}
+          x={W / 2} y={fs * 0.95}
+          textAnchor="middle"
           fontFamily='"Arial Black","Helvetica Neue",sans-serif'
           fontWeight="900"
           fontSize={fs}
           fill="url(#logo-grad)"
           filter="url(#logo-glow)"
-          letterSpacing="-3"
+          letterSpacing="-2"
         >Whispr</text>
       </svg>
-      {sub && <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: 11, letterSpacing: '0.35em', paddingTop: 8, textTransform: 'uppercase', fontWeight: 400 }}>MESSENGER</div>}
+      {sub && <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: 11, letterSpacing: '0.35em', marginTop: 6, textTransform: 'uppercase', fontWeight: 400 }}>MESSENGER</div>}
     </div>
   );
 }
@@ -411,7 +414,7 @@ export default function WhisprPro() {
     s.on('call_ended', ()=>cleanupCall());
     s.on('call_rejected', ()=>{alert('Звонок отклонён');cleanupCall();});
     s.on('call_failed', ({reason})=>{alert(reason);cleanupCall();});
-    s.on('force_disconnect', ({reason})=>{alert(reason);handleLogout();});
+    s.on('force_disconnect', ({reason})=>{handleLogout();});
     return ()=>{s.close();cleanupCall();};
   }, []);
 
