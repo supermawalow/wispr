@@ -306,7 +306,7 @@ export default function WhisprPro() {
     iceCandidatePoolSize: 10,
   };
 
-  useEffect(() => { try { localStorage.setItem('whispr_theme',theme); } catch {} }, [theme]);
+  useEffect(() => { try { localStorage.setItem('whispr_theme',theme); } catch(e) {} }, [theme]);
 
   const cleanupCall = useCallback(() => {
     if (peerConnectionRef.current) { peerConnectionRef.current.close(); peerConnectionRef.current=null; }
@@ -393,7 +393,20 @@ export default function WhisprPro() {
     s.on('reaction_updated', ({messageId,reactions}) => setMessages(p=>{const u={...p};for(const k of Object.keys(u))u[k]=u[k].map(m=>(m._id===messageId||m.id===messageId)?{...m,reactions}:m);return u;}));
     s.on('avatar_updated', ({username,avatar}) => setAvatars(p=>({...p,[username]:avatar})));
     s.on('incoming_call', ({from,offer}) => { callPeerRef.current=from; incomingOfferRef.current=offer; setCallPeer(from); setCallState('incoming'); });
-    s.on('call_answered', async({answer}) => { try{ const pc=peerConnectionRef.current; if(!pc)return; await pc.setRemoteDescription(new RTCSessionDescription(answer)); // flush pending for(const c of pendingIceCandidatesRef.current){try{await pc.addIceCandidate(new RTCIceCandidate(c));}catch{}} pendingIceCandidatesRef.current=[]; setCallState('active');callTimerRef.current=setInterval(()=>setCallDuration(d=>d+1),1000);}catch(e){console.error('call_answered err',e);} });
+    s.on('call_answered', async({answer}) => {
+      try {
+        const pc = peerConnectionRef.current;
+        if (!pc) return;
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        const pending = [...pendingIceCandidatesRef.current];
+        pendingIceCandidatesRef.current = [];
+        for (const cand of pending) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch(icErr) {}
+        }
+        setCallState('active');
+        callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+      } catch(e) { console.error('call_answered err', e); }
+    });
     s.on('ice_candidate', async({candidate}) => { try{ const pc=peerConnectionRef.current; if(pc&&pc.remoteDescription&&pc.remoteDescription.type){ await pc.addIceCandidate(new RTCIceCandidate(candidate)); } else { pendingIceCandidatesRef.current.push(candidate); } }catch(e){console.warn('ICE error',e);} });
     s.on('call_ended', ()=>cleanupCall());
     s.on('call_rejected', ()=>{alert('Звонок отклонён');cleanupCall();});
@@ -435,8 +448,8 @@ export default function WhisprPro() {
   useEffect(()=>{if(activeChat){setChatVisible(false);setTimeout(()=>setChatVisible(true),50);}},[activeChat?.id]);
 
   const handleRegister = e => { e.preventDefault();setAuthError('');socket.emit('register',{username,displayName,password},res=>{if(res.success)handleLogin(e);else setAuthError(res.error);}); };
-  const handleLogin = e => { e.preventDefault();setAuthError('');socket.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch{}setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
-  const handleLogout = () => { cleanupCall();try{localStorage.removeItem('whispr_creds');}catch{}setIsAuthenticated(false);setCurrentUser(null);setContacts([]);setGroups([]);setActiveChat(null);setMessages({});setUsername('');setPassword('');setDisplayName(''); };
+  const handleLogin = e => { e.preventDefault();setAuthError('');socket.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){}setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
+  const handleLogout = () => { cleanupCall();try{localStorage.removeItem('whispr_creds');}catch(e){}setIsAuthenticated(false);setCurrentUser(null);setContacts([]);setGroups([]);setActiveChat(null);setMessages({});setUsername('');setPassword('');setDisplayName(''); };
 
   const handleAvatarUpload = (e, fromSettings=false) => {
     const f=e.target.files[0]; if(!f)return;
@@ -471,7 +484,7 @@ export default function WhisprPro() {
         if(res.user.username!==currentUser.username){
           setActiveChat(null);setMessages({});setContacts([]);
           const savedP=savedCredsRef.current?.p||password||currentPassword;
-          try{localStorage.setItem('whispr_creds',JSON.stringify({u:res.user.username,p:savedP}));}catch{}
+          try{localStorage.setItem('whispr_creds',JSON.stringify({u:res.user.username,p:savedP}));}catch(e){}
           socket.emit('login',{username:res.user.username,password:savedP},r2=>{if(r2.success){setContacts(r2.contacts||[]);setGroups(r2.groups||[]);}});
         }
         setProfileSuccess('Профиль обновлён!');
