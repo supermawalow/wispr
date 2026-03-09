@@ -54,8 +54,16 @@ function IncomingCallOverlay({ from, fromDisplay, fromAvatar, onAccept, onReject
   );
 }
 
-function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, calling }) {
+function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, calling, audioRef, remoteStream }) {
   const fmt = (s) => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  const localAudioRef = useRef(null);
+  const resolvedRef = audioRef || localAudioRef;
+  useEffect(() => {
+    if (resolvedRef.current && remoteStream) {
+      resolvedRef.current.srcObject = remoteStream;
+      resolvedRef.current.play().catch(() => {});
+    }
+  }, [remoteStream]);
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[200]">
       <div className="bg-white/10 backdrop-blur-2xl border border-white/20 rounded-3xl p-8 text-center w-80 shadow-2xl">
@@ -67,7 +75,7 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
           <button onClick={onEnd} className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center shadow-lg"><PhoneOff className="w-7 h-7 text-white" /></button>
         </div>
       </div>
-      <audio id="remoteAudio" autoPlay />
+      <audio ref={resolvedRef} id="remoteAudio" autoPlay playsInline />
     </div>
   );
 }
@@ -121,6 +129,8 @@ export default function WhisprPro() {
   const callTimerRef = useRef(null);
   const callPeerRef = useRef(null);
   const incomingOfferRef = useRef(null);
+  const remoteStreamRef = useRef(null);
+  const remoteAudioRef = useRef(null);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [adminTab, setAdminTab] = useState('users');
   const [adminStats, setAdminStats] = useState(null);
@@ -133,7 +143,12 @@ export default function WhisprPro() {
   const currentUserRef = useRef(null);
 
   const getChatKey = (chat) => chat ? (chat.type === 'group' ? `group_${chat.id}` : chat.id) : null;
-  const ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+  const ICE = { iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+  ] };
 
   const cleanupCall = useCallback(() => {
     if (peerConnectionRef.current) { peerConnectionRef.current.close(); peerConnectionRef.current = null; }
@@ -141,7 +156,8 @@ export default function WhisprPro() {
     clearInterval(callTimerRef.current);
     setCallState('idle'); setCallPeer(null); setCallDuration(0); setCallMuted(false);
     callPeerRef.current = null; incomingOfferRef.current = null;
-    const a = document.getElementById('remoteAudio'); if (a) a.srcObject = null;
+    remoteStreamRef.current = null;
+    const a = remoteAudioRef.current || document.getElementById('remoteAudio'); if (a) a.srcObject = null;
   }, []);
 
   const startCall = useCallback(async (toUsername) => {
@@ -151,7 +167,7 @@ export default function WhisprPro() {
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
-      pc.ontrack = e => { const a = document.getElementById('remoteAudio'); if (a) a.srcObject = e.streams[0]; };
+      pc.ontrack = e => { remoteStreamRef.current = e.streams[0]; const a = remoteAudioRef.current || document.getElementById('remoteAudio'); if (a) a.srcObject = e.streams[0]; };
       pc.onicecandidate = e => { if (e.candidate) socketRef.current?.emit('ice_candidate', { to: toUsername, candidate: e.candidate }); };
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -167,7 +183,7 @@ export default function WhisprPro() {
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
-      pc.ontrack = e => { const a = document.getElementById('remoteAudio'); if (a) a.srcObject = e.streams[0]; };
+      pc.ontrack = e => { remoteStreamRef.current = e.streams[0]; const a = remoteAudioRef.current || document.getElementById('remoteAudio'); if (a) a.srcObject = e.streams[0]; };
       pc.onicecandidate = e => { if (e.candidate) socketRef.current?.emit('ice_candidate', { to: callPeerRef.current, candidate: e.candidate }); };
       await pc.setRemoteDescription(incomingOfferRef.current);
       const answer = await pc.createAnswer();
@@ -238,6 +254,13 @@ export default function WhisprPro() {
   const handleLeaveGroup = () => { if (!confirm('Покинуть группу?')) return; socket.emit('leave_group', activeChat.id, (res) => { if (res.success) { setGroups(prev => prev.filter(g => g._id !== activeChat.id)); setActiveChat(null); setShowGroupInfo(false); } }); };
   const searchAddMember = (q) => { setAddMemberQuery(q); if (q.length < 2) { setAddMemberResults([]); return; } socket.emit('search_users', q, (res) => { if (res.success) setAddMemberResults(res.results); }); };
   const handleAddMember = (u) => { socket.emit('group_add_member', { groupId: activeChat.id, username: u }, (res) => { if (res.success) { setGroups(prev => prev.map(g => g._id === activeChat.id ? res.group : g)); setActiveChat(prev => prev ? { ...prev, data: res.group } : prev); setAddMemberQuery(''); setAddMemberResults([]); } else alert(res.error); }); };
+  const handleDemote = (username) => {
+    if (!confirm(`Разжаловать ${username}?`)) return;
+    socket.emit('admin_demote_user', username, (res) => {
+      if (res.success) loadAdminData(adminSearch);
+      else alert(res.error);
+    });
+  };
   const loadAdminData = (search = '') => { socket.emit('admin_get_stats', (res) => { if (res.success) setAdminStats(res.stats); }); socket.emit('admin_get_users', { search }, (res) => { if (res.success) setAllUsers(res.users); }); socket.emit('admin_get_logs', (res) => { if (res.success) setAdminLogs(res.logs); }); };
   const fmtTime = (ts) => { const d = new Date(ts), n = new Date(); return d.toDateString() === n.toDateString() ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }); };
   const fmtDur = (s) => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
@@ -354,10 +377,10 @@ export default function WhisprPro() {
 
       {showGroupInfo&&activeChat?.type==='group'&&(<div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowGroupInfo(false)}><div className="bg-white/10 backdrop-blur-2xl border border-white/20 rounded-3xl p-6 w-full max-w-md m-4 max-h-[85vh] overflow-y-auto" onClick={e=>e.stopPropagation()}><div className="flex items-center justify-between mb-4"><h3 className="text-xl font-bold text-white">{activeChatData?.name}</h3><button onClick={() => setShowGroupInfo(false)} className="p-2 rounded-lg bg-white/20"><X className="w-5 h-5 text-white"/></button></div>{activeChatData?.description&&<p className="text-white/60 text-sm mb-4">{activeChatData.description}</p>}<p className="text-xs text-white/40 uppercase tracking-wider mb-2">Участники ({activeChatData?.members?.length})</p><div className="space-y-2 mb-4">{activeChatData?.members?.map(member => { const c=contacts.find(x=>x.username===member)||{username:member,displayName:member}; return (<div key={member} className="flex items-center gap-3 px-3 py-2 bg-white/10 rounded-xl"><Avatar username={member} displayName={c.displayName} avatar={avatars[member]} size="sm"/><div className="flex-1"><div className="text-white text-sm">{c.displayName||member}</div><div className="text-xs text-white/50">@{member}</div></div>{activeChatData?.admins?.includes(member)&&<Crown className="w-4 h-4 text-yellow-400"/>}</div>); })}</div>{activeChatData?.admins?.includes(currentUser?.username)&&(<div className="mb-4"><p className="text-xs text-white/40 uppercase tracking-wider mb-2">Добавить</p><input type="text" value={addMemberQuery} onChange={e => searchAddMember(e.target.value)} className="w-full px-4 py-2 bg-white/20 border border-white/30 rounded-xl text-white placeholder-white/50 focus:bg-white/30 focus:outline-none mb-2" placeholder="Поиск..."/>{addMemberResults.filter(u=>!activeChatData.members.includes(u.username)).map(u=>(<div key={u.username} className="flex items-center gap-3 px-3 py-2 bg-white/10 rounded-xl mb-1"><Avatar username={u.username} displayName={u.displayName} avatar={u.avatar} size="sm"/><span className="text-white text-sm flex-1">{u.displayName}</span><button onClick={() => handleAddMember(u.username)} className="px-2 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-white text-xs flex items-center gap-1"><UserCheck className="w-3 h-3"/>Добавить</button></div>))}</div>)}<button onClick={handleLeaveGroup} className="w-full py-2.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded-xl text-red-300 font-medium">Покинуть группу</button></div></div>)}
 
-      {showAdminPanel&&currentUser?.isAdmin&&(<div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowAdminPanel(false)}><div className="bg-white/10 backdrop-blur-2xl border border-white/20 rounded-3xl p-6 w-full max-w-4xl m-4 max-h-[90vh] overflow-y-auto" onClick={e=>e.stopPropagation()}><div className="flex items-center justify-between mb-5"><h3 className="text-2xl font-bold text-white flex items-center gap-2"><Shield className="w-6 h-6"/>Админ Панель</h3><button onClick={() => setShowAdminPanel(false)} className="p-2 rounded-lg bg-white/20"><X className="w-5 h-5 text-white"/></button></div>{adminStats&&(<div className="grid grid-cols-3 md:grid-cols-6 gap-2 mb-5">{[['Всего',adminStats.totalUsers],['Онлайн',adminStats.onlineUsers],['Сообщ.',adminStats.totalMessages],['Чатов',adminStats.totalChats],['Заблок.',adminStats.blockedUsers],['Групп',adminStats.totalGroups]].map(([l,v])=>(<div key={l} className="p-3 bg-white/10 border border-white/20 rounded-xl text-center"><div className="text-white/60 text-xs">{l}</div><div className="text-xl font-bold text-white">{v}</div></div>))}</div>)}<div className="flex gap-2 mb-4">{['users','logs'].map(tab=>(<button key={tab} onClick={() => setAdminTab(tab)} className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors ${adminTab===tab?'bg-white/30 text-white':'bg-white/10 text-white/60 hover:bg-white/20'}`}>{tab==='users'?<><Users className="w-4 h-4"/>Пользователи</>:<><History className="w-4 h-4"/>История</>}</button>))}</div>{adminTab==='users'&&(<><input type="text" value={adminSearch} onChange={e => { setAdminSearch(e.target.value); loadAdminData(e.target.value); }} className="w-full px-4 py-2 bg-white/20 border border-white/30 rounded-xl text-white placeholder-white/50 focus:outline-none mb-3" placeholder="🔍 Поиск..."/><div className="space-y-2">{allUsers.map(u=>(<div key={u.username} className={`px-4 py-3 border rounded-xl flex items-center justify-between ${u.isBlocked?'bg-red-500/10 border-red-500/20':'bg-white/10 border-white/20'}`}><div className="flex items-center gap-3"><Circle className={`w-2 h-2 flex-shrink-0 ${u.isOnline?'fill-green-400 text-green-400':'fill-gray-500 text-gray-500'}`}/><div><div className="flex items-center gap-2"><span className="text-white font-medium">{u.displayName}</span>{u.isAdmin&&<Crown className="w-4 h-4 text-yellow-400"/>}{u.isBlocked&&<Ban className="w-4 h-4 text-red-400"/>}</div><div className="text-xs text-white/50">@{u.username} • {u.contactsCount} конт.</div></div></div>{!u.isAdmin&&(<div className="flex gap-2 flex-shrink-0"><button onClick={()=>socket.emit('admin_block_user',{target:u.username,block:!u.isBlocked},res=>{if(res.success)loadAdminData(adminSearch);})} className={`px-2 py-1 rounded-lg text-xs flex items-center gap-1 border ${u.isBlocked?'bg-green-500/20 border-green-500/30 text-green-200':'bg-orange-500/20 border-orange-500/30 text-orange-200'}`}><Ban className="w-3 h-3"/>{u.isBlocked?'Разблок.':'Блок.'}</button><button onClick={()=>{if(confirm(`Промоут ${u.username}?`))socket.emit('admin_promote_user',u.username,res=>{if(res.success)loadAdminData(adminSearch);})}} className="px-2 py-1 bg-yellow-500/20 border border-yellow-500/30 rounded-lg text-yellow-200 text-xs"><Crown className="w-3 h-3"/></button><button onClick={()=>{if(confirm(`Удалить ${u.username}?`))socket.emit('admin_delete_user',u.username,res=>{if(res.success)loadAdminData(adminSearch);})}} className="px-2 py-1 bg-red-500/20 border border-red-500/30 rounded-lg text-red-200 text-xs"><Trash2 className="w-3 h-3"/></button></div>)}</div>))}</div></>)}{adminTab==='logs'&&(<div className="space-y-2">{adminLogs.length===0&&<p className="text-center py-8 text-white/50">Нет действий</p>}{adminLogs.map((log,i)=>(<div key={i} className="px-4 py-3 bg-white/10 border border-white/20 rounded-xl flex items-center justify-between"><div><div className="text-white/90 text-sm">{log.details}</div><div className="text-xs text-white/40">@{log.admin}</div></div><div className="text-xs text-white/40 flex-shrink-0 ml-4">{fmtTime(log.timestamp)}</div></div>))}</div>)}</div></div>)}
+      {showAdminPanel&&currentUser?.isAdmin&&(<div className="absolute inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowAdminPanel(false)}><div className="bg-white/10 backdrop-blur-2xl border border-white/20 rounded-3xl p-6 w-full max-w-4xl m-4 max-h-[90vh] overflow-y-auto" onClick={e=>e.stopPropagation()}><div className="flex items-center justify-between mb-5"><h3 className="text-2xl font-bold text-white flex items-center gap-2"><Shield className="w-6 h-6"/>Админ Панель</h3><button onClick={() => setShowAdminPanel(false)} className="p-2 rounded-lg bg-white/20"><X className="w-5 h-5 text-white"/></button></div>{adminStats&&(<div className="grid grid-cols-3 md:grid-cols-6 gap-2 mb-5">{[['Всего',adminStats.totalUsers],['Онлайн',adminStats.onlineUsers],['Сообщ.',adminStats.totalMessages],['Чатов',adminStats.totalChats],['Заблок.',adminStats.blockedUsers],['Групп',adminStats.totalGroups]].map(([l,v])=>(<div key={l} className="p-3 bg-white/10 border border-white/20 rounded-xl text-center"><div className="text-white/60 text-xs">{l}</div><div className="text-xl font-bold text-white">{v}</div></div>))}</div>)}<div className="flex gap-2 mb-4">{['users','logs'].map(tab=>(<button key={tab} onClick={() => setAdminTab(tab)} className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors ${adminTab===tab?'bg-white/30 text-white':'bg-white/10 text-white/60 hover:bg-white/20'}`}>{tab==='users'?<><Users className="w-4 h-4"/>Пользователи</>:<><History className="w-4 h-4"/>История</>}</button>))}</div>{adminTab==='users'&&(<><input type="text" value={adminSearch} onChange={e => { setAdminSearch(e.target.value); loadAdminData(e.target.value); }} className="w-full px-4 py-2 bg-white/20 border border-white/30 rounded-xl text-white placeholder-white/50 focus:outline-none mb-3" placeholder="🔍 Поиск..."/><div className="space-y-2">{allUsers.map(u=>(<div key={u.username} className={`px-4 py-3 border rounded-xl flex items-center justify-between ${u.isBlocked?'bg-red-500/10 border-red-500/20':'bg-white/10 border-white/20'}`}><div className="flex items-center gap-3"><Circle className={`w-2 h-2 flex-shrink-0 ${u.isOnline?'fill-green-400 text-green-400':'fill-gray-500 text-gray-500'}`}/><div><div className="flex items-center gap-2"><span className="text-white font-medium">{u.displayName}</span>{u.isAdmin&&<Crown className="w-4 h-4 text-yellow-400"/>}{u.isBlocked&&<Ban className="w-4 h-4 text-red-400"/>}</div><div className="text-xs text-white/50">@{u.username} • {u.contactsCount} конт.</div></div></div>{!u.isAdmin&&(<div className="flex gap-2 flex-shrink-0"><button onClick={()=>socket.emit('admin_block_user',{target:u.username,block:!u.isBlocked},res=>{if(res.success)loadAdminData(adminSearch);})} className={`px-2 py-1 rounded-lg text-xs flex items-center gap-1 border ${u.isBlocked?'bg-green-500/20 border-green-500/30 text-green-200':'bg-orange-500/20 border-orange-500/30 text-orange-200'}`}><Ban className="w-3 h-3"/>{u.isBlocked?'Разблок.':'Блок.'}</button>{!u.isAdmin&&<button onClick={()=>{if(confirm(`Промоут ${u.username}?`))socket.emit('admin_promote_user',u.username,res=>{if(res.success)loadAdminData(adminSearch);})}} className="px-2 py-1 bg-yellow-500/20 border border-yellow-500/30 rounded-lg text-yellow-200 text-xs" title="Сделать админом"><Crown className="w-3 h-3"/></button>}{u.isAdmin&&u.username!=='admin'&&<button onClick={()=>handleDemote(u.username)} className="px-2 py-1 bg-orange-500/20 border border-orange-500/30 rounded-lg text-orange-200 text-xs" title="Разжаловать"><Crown className="w-3 h-3 line-through opacity-60"/></button>}<button onClick={()=>{if(confirm(`Удалить ${u.username}?`))socket.emit('admin_delete_user',u.username,res=>{if(res.success)loadAdminData(adminSearch);})}} className="px-2 py-1 bg-red-500/20 border border-red-500/30 rounded-lg text-red-200 text-xs"><Trash2 className="w-3 h-3"/></button></div>)}</div>))}</div></>)}{adminTab==='logs'&&(<div className="space-y-2">{adminLogs.length===0&&<p className="text-center py-8 text-white/50">Нет действий</p>}{adminLogs.map((log,i)=>(<div key={i} className="px-4 py-3 bg-white/10 border border-white/20 rounded-xl flex items-center justify-between"><div><div className="text-white/90 text-sm">{log.details}</div><div className="text-xs text-white/40">@{log.admin}</div></div><div className="text-xs text-white/40 flex-shrink-0 ml-4">{fmtTime(log.timestamp)}</div></div>))}</div>)}</div></div>)}
 
       {callState==='incoming'&&<IncomingCallOverlay from={callPeer} fromDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} fromAvatar={avatars[callPeer]} onAccept={acceptCall} onReject={rejectCall}/>}
-      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'}/>}
+      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} audioRef={remoteAudioRef} remoteStream={remoteStreamRef.current}/>}
 
       <style>{STYLES}</style>
       <div style={{position:'fixed',bottom:10,left:'50%',transform:'translateX(-50%)',color:'rgba(255,255,255,0.2)',fontSize:'11px',zIndex:100,pointerEvents:'none',whiteSpace:'nowrap'}}>by Meowlentii</div>

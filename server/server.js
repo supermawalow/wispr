@@ -510,6 +510,21 @@ io.on('connection', (socket) => {
     } catch (e) { cb({ success: false, error: 'Ошибка' }); }
   });
 
+  socket.on('admin_demote_user', async (target, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      const user = await User.findOne({ username: me });
+      if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
+      if (target === 'admin') return cb({ success: false, error: 'Нельзя разжаловать главного админа' });
+      if (target === me) return cb({ success: false, error: 'Нельзя разжаловать себя' });
+      const t = await User.findOneAndUpdate({ username: target.toLowerCase() }, { isAdmin: false });
+      if (!t) return cb({ success: false, error: 'Пользователь не найден' });
+      await logAdminAction(me, 'DEMOTE_USER', target, `${target} разжалован из администраторов`);
+      cb({ success: true });
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
 
   // ── РЕДАКТИРОВАТЬ СООБЩЕНИЕ ──
   socket.on('edit_message', async (data, cb) => {
