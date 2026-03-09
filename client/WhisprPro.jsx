@@ -1,3 +1,23 @@
+// ── Компонент аватара ──
+function Avatar({ username, displayName, avatar, size = 'md', online = false }) {
+  const sizes = { sm: 'w-8 h-8 text-xs', md: 'w-10 h-10 text-sm', lg: 'w-14 h-14 text-lg' };
+  const colors = ['bg-violet-500','bg-pink-500','bg-teal-500','bg-orange-500','bg-blue-500','bg-green-500'];
+  const color = colors[username?.charCodeAt(0) % colors.length] || 'bg-violet-500';
+  return (
+    <div className="relative flex-shrink-0">
+      <div className={`${sizes[size]} rounded-full overflow-hidden flex items-center justify-center font-bold text-white ${avatar ? '' : color}`}>
+        {avatar
+          ? <img src={avatar} alt={displayName} className="w-full h-full object-cover" />
+          : <span>{(displayName || username || '?')[0].toUpperCase()}</span>
+        }
+      </div>
+      {online !== undefined && (
+        <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-purple-800 ${online ? 'bg-green-400' : 'bg-gray-500'}`}></div>
+      )}
+    </div>
+  );
+}
+
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { 
@@ -14,6 +34,7 @@ export default function WhisprPro() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [avatars, setAvatars] = useState({}); // username -> base64
   
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -105,6 +126,10 @@ export default function WhisprPro() {
       });
     });
 
+    newSocket.on('avatar_updated', ({ username, avatar }) => {
+      setAvatars(prev => ({ ...prev, [username]: avatar }));
+    });
+
     newSocket.on('force_disconnect', ({ reason }) => {
       alert(reason);
       handleLogout();
@@ -130,6 +155,23 @@ export default function WhisprPro() {
       if (res.success) { setCurrentUser(res.user); setContacts(res.contacts || []); setIsAuthenticated(true); }
       else setAuthError(res.error);
     });
+  };
+
+  const handleAvatarUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 500000) { alert('Файл слишком большой (макс. 500KB)'); return; }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = reader.result;
+      socket.emit('update_avatar', base64, (res) => {
+        if (res.success) {
+          setAvatars(prev => ({ ...prev, [currentUser.username]: base64 }));
+          setCurrentUser(prev => ({ ...prev, avatar: base64 }));
+        }
+      });
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleLogout = () => {
@@ -367,7 +409,16 @@ export default function WhisprPro() {
               </button>
             </div>
           </div>
-          <p className="text-xs text-white/70">@{currentUser?.username}</p>
+          <div className="flex items-center gap-2 mt-2">
+            <label className="cursor-pointer relative group">
+              <Avatar username={currentUser?.username} displayName={currentUser?.displayName} avatar={avatars[currentUser?.username] || currentUser?.avatar} size="sm" />
+              <div className="absolute inset-0 bg-black/40 rounded-full opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                <span className="text-white text-xs">✎</span>
+              </div>
+              <input type="file" accept="image/*" onChange={handleAvatarUpload} className="hidden" />
+            </label>
+            <p className="text-xs text-white/70">@{currentUser?.username}</p>
+          </div>
         </div>
 
         <div className="p-4">
@@ -391,7 +442,7 @@ export default function WhisprPro() {
                 }`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Circle className={`w-2 h-2 ${contact.isOnline ? 'fill-green-400 text-green-400 animate-pulse' : 'fill-gray-400 text-gray-400'}`} />
+                    <Avatar username={contact.username} displayName={contact.displayName} avatar={avatars[contact.username]} size="sm" online={contact.isOnline} />
                     <div>
                       <div className="text-sm font-medium text-white flex items-center gap-1">
                         {contact.displayName}
@@ -422,6 +473,7 @@ export default function WhisprPro() {
               <button onClick={() => setShowSidebar(!showSidebar)} className="lg:hidden p-2 rounded-lg bg-white/20">
                 <Menu className="w-5 h-5 text-white" />
               </button>
+              <Avatar username={activeChatData?.username} displayName={activeChatData?.displayName} avatar={avatars[activeChatData?.username]} size="md" online={activeChatData?.isOnline} />
               <div>
                 <div className="text-white font-medium">{activeChatData?.displayName}</div>
                 <div className="text-xs text-white/60">
@@ -446,6 +498,9 @@ export default function WhisprPro() {
                     onMouseEnter={() => { clearTimeout(hoverTimeoutRef.current); setHoveredMsg(msgId); }}
                     onMouseLeave={() => { hoverTimeoutRef.current = setTimeout(() => setHoveredMsg(null), 300); }}>
 
+                    {!isOwn && (
+                      <Avatar username={msg.from} displayName={msg.from} avatar={avatars[msg.from]} size="sm" />
+                    )}
                     <div className="relative max-w-md">
                       {/* Панель реакций при наведении */}
                       {hoveredMsg === msgId && (

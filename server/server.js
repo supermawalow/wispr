@@ -28,6 +28,7 @@ const userSchema = new mongoose.Schema({
   password:    { type: String, required: true },
   isAdmin:     { type: Boolean, default: false },
   isBlocked:   { type: Boolean, default: false },
+  avatar:      { type: String, default: null },
   contacts:    [{ type: String }],
   createdAt:   { type: Date, default: Date.now }
 });
@@ -369,6 +370,18 @@ io.on('connection', (socket) => {
       await logAdminAction(me, 'PROMOTE_USER', target, `${target} стал администратором`);
       cb({ success: true });
     } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+
+  // ── ОБНОВИТЬ АВАТАР ──
+  socket.on('update_avatar', async (avatarData, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      await User.updateOne({ username: me }, { avatar: avatarData });
+      io.emit('avatar_updated', { username: me, avatar: avatarData });
+      cb({ success: true });
+    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
   });
 
   // ── ОТКЛЮЧЕНИЕ ──
