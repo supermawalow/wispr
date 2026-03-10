@@ -23,24 +23,29 @@ mongoose.connect(MONGODB_URI)
 //  СХЕМЫ
 // ══════════════════════════════════════════
 const userSchema = new mongoose.Schema({
-  username:    { type: String, required: true, unique: true, lowercase: true },
-  displayName: { type: String, required: true },
-  password:    { type: String, required: true },
-  isAdmin:     { type: Boolean, default: false },
-  isBlocked:   { type: Boolean, default: false },
-  avatar:      { type: String, default: null },
-  contacts:    [{ type: String }],
-  createdAt:   { type: Date, default: Date.now }
+  username:     { type: String, required: true, unique: true, lowercase: true },
+  displayName:  { type: String, required: true },
+  password:     { type: String, required: true },
+  isAdmin:      { type: Boolean, default: false },
+  isBlocked:    { type: Boolean, default: false },
+  avatar:       { type: String, default: null },
+  contacts:     [{ type: String }],
+  bio:          { type: String, default: '' },
+  status:       { type: String, default: 'online' }, // online | away | dnd
+  hideOnline:   { type: Boolean, default: false },
+  blockedUsers: [{ type: String }],
+  createdAt:    { type: Date, default: Date.now }
 });
 
 const groupSchema = new mongoose.Schema({
-  name:        { type: String, required: true },
-  description: { type: String, default: '' },
-  avatar:      { type: String, default: null },
-  owner:       { type: String, required: true },
-  admins:      [{ type: String }],
-  members:     [{ type: String }],
-  createdAt:   { type: Date, default: Date.now }
+  name:          { type: String, required: true },
+  description:   { type: String, default: '' },
+  avatar:        { type: String, default: null },
+  owner:         { type: String, required: true },
+  admins:        [{ type: String }],
+  members:       [{ type: String }],
+  pinnedMessage: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
+  createdAt:     { type: Date, default: Date.now }
 });
 
 const messageSchema = new mongoose.Schema({
@@ -69,6 +74,30 @@ const adminLogSchema = new mongoose.Schema({
   timestamp: { type: Date, default: Date.now }
 });
 
+
+const channelSchema = new mongoose.Schema({
+  name:        { type: String, required: true },
+  username:    { type: String, default: null, lowercase: true }, // @username для поиска
+  description: { type: String, default: '' },
+  avatar:      { type: String, default: null },
+  owner:       { type: String, required: true },
+  admins:      [{ type: String }],
+  subscribers: [{ type: String }],
+  isPrivate:   { type: Boolean, default: false },
+  createdAt:   { type: Date, default: Date.now }
+});
+
+const callLogSchema = new mongoose.Schema({
+  from:      { type: String, required: true },
+  to:        { type: String, required: true },
+  type:      { type: String, default: 'audio' }, // audio | video
+  status:    { type: String, default: 'missed' }, // missed | completed | cancelled
+  duration:  { type: Number, default: 0 },        // секунды
+  timestamp: { type: Date, default: Date.now }
+});
+
+const Channel  = mongoose.model('Channel', channelSchema);
+const CallLog  = mongoose.model('CallLog', callLogSchema);
 const User     = mongoose.model('User', userSchema);
 const Group    = mongoose.model('Group', groupSchema);
 const Message  = mongoose.model('Message', messageSchema);
@@ -133,7 +162,7 @@ io.on('connection', (socket) => {
 
       const contactDocs = await User.find({ username: { $in: user.contacts } });
       const contacts = contactDocs.map(c => ({
-        username: c.username, displayName: c.displayName,
+        username: c.username, displayName: c.displayName, bio: c.bio||'', status: c.hideOnline?'hidden':(userSockets.has(c.username)?(c.status||'online'):'offline'),
         avatar: c.avatar, isOnline: userSockets.has(c.username), isBlocked: c.isBlocked
       }));
 
@@ -141,7 +170,8 @@ io.on('connection', (socket) => {
       const groups = await Group.find({ members: user.username });
 
       await Message.updateMany({ to: user.username, delivered: false }, { delivered: true });
-      io.emit('user_status_change', { username: user.username, isOnline: true });
+      const statusEmit = user.hideOnline ? null : { username: user.username, isOnline: true, status: user.status || 'online' };
+      if (statusEmit) io.emit('user_status_change', statusEmit);
 
       cb({ success: true, user: { ...user.toObject(), password: undefined }, contacts, groups });
     } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
@@ -157,7 +187,7 @@ io.on('connection', (socket) => {
         $or: [{ username: { $regex: query, $options: 'i' } }, { displayName: { $regex: query, $options: 'i' } }]
       }).limit(20);
       cb({ success: true, results: results.map(u => ({
-        username: u.username, displayName: u.displayName,
+        username: u.username, displayName: u.displayName, bio: u.bio||'', status: u.hideOnline?'hidden':(userSockets.has(u.username)?(u.status||'online'):'offline'),
         avatar: u.avatar, isOnline: userSockets.has(u.username), isBlocked: u.isBlocked
       }))});
     } catch (e) { cb({ success: false, error: 'Ошибка поиска' }); }
@@ -195,13 +225,26 @@ io.on('connection', (socket) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return cb({ success: false, error: 'Не авторизован' });
     try {
-      const msgs = await Message.find({ chatId: getChatId(me, target.toLowerCase()), chatType: 'direct' })
+      const chatId = getChatId(me, target.toLowerCase());
+      const msgs = await Message.find({ chatId, chatType: 'direct' })
         .sort({ timestamp: 1 }).limit(200);
-      await Message.updateMany({ chatId: getChatId(me, target.toLowerCase()), to: me, read: false }, { read: true });
+      await Message.updateMany({ chatId, to: me, read: false }, { read: true });
       const senderSocket = userSockets.get(target.toLowerCase());
       if (senderSocket) io.to(senderSocket).emit('messages_read', { by: me });
-      cb({ success: true, messages: msgs });
-    } catch (e) { cb({ success: false, error: 'Ошибка загрузки' }); }
+      // Добавить историю звонков как виртуальные сообщения
+      const callLogs = await CallLog.find({
+        $or: [{ from: me, to: target.toLowerCase() }, { from: target.toLowerCase(), to: me }]
+      }).sort({ timestamp: 1 }).limit(50);
+      const callMsgs = callLogs.map(log => ({
+        _id: `call_${log._id}`, chatId, type: 'call_log',
+        callSubtype: log.type, callStatus: log.status,
+        callDuration: log.duration, from: log.from,
+        to: log.to, timestamp: log.timestamp, text: ''
+      }));
+      const all = [...msgs.map(m => m.toObject()), ...callMsgs]
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      cb({ success: true, messages: all });
+    } catch (e) { console.error(e); cb({ success: false, error: 'Ошибка загрузки' }); }
   });
 
   // ── ОТПРАВИТЬ СООБЩЕНИЕ (личное) ──
@@ -417,7 +460,7 @@ io.on('connection', (socket) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return cb({ success: false, error: 'Не авторизован' });
     try {
-      const { displayName, newUsername, avatar } = data;
+      const { displayName, newUsername, avatar, bio, hideOnline, status } = data;
       const user = await User.findOne({ username: me });
       if (!user) return cb({ success: false, error: 'Пользователь не найден' });
 
@@ -462,6 +505,9 @@ io.on('connection', (socket) => {
 
       if (displayName) user.displayName = displayName.trim();
       if (avatar !== undefined) user.avatar = avatar;
+      if (bio !== undefined) user.bio = bio.slice(0, 200);
+      if (hideOnline !== undefined) user.hideOnline = hideOnline;
+      if (status && ['online','away','dnd'].includes(status)) user.status = status;
       await user.save();
 
       if (avatar !== undefined) io.emit('avatar_updated', { username: user.username, avatar });
@@ -470,6 +516,260 @@ io.on('connection', (socket) => {
       delete updatedUser.password;
       cb({ success: true, user: updatedUser });
     } catch (e) { console.error(e); cb({ success: false, error: 'Ошибка сервера' }); }
+  });
+
+
+  // ── ОБНОВИТЬ СТАТУС ──
+  socket.on('set_status', async (status, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb && cb({ success: false });
+    const allowed = ['online','away','dnd'];
+    if (!allowed.includes(status)) return cb && cb({ success: false, error: 'Неверный статус' });
+    try {
+      await User.updateOne({ username: me }, { status });
+      const user = await User.findOne({ username: me });
+      if (!user.hideOnline) {
+        // Уведомить ВСЕХ онлайн пользователей у кого есть этот контакт
+        for (const [username, sid] of userSockets.entries()) {
+          if (username === me) continue;
+          const u = await User.findOne({ username });
+          if (u && u.contacts.includes(me)) {
+            io.to(sid).emit('user_status_change', { username: me, isOnline: status !== 'dnd', status });
+          }
+        }
+      }
+      if (cb) cb({ success: true });
+    } catch (e) { if (cb) cb({ success: false }); }
+  });
+
+  // ── СКРЫТЬ ОНЛАЙН / ПОКАЗАТЬ ──
+  socket.on('set_hide_online', async (hide, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb && cb({ success: false });
+    try {
+      await User.updateOne({ username: me }, { hideOnline: hide });
+      // Если скрываем — сказать всем что оффлайн, если показываем — онлайн
+      for (const [username, sid] of userSockets.entries()) {
+        if (username === me) continue;
+        const u = await User.findOne({ username });
+        if (u && u.contacts.includes(me)) {
+          io.to(sid).emit('user_status_change', { username: me, isOnline: !hide, status: hide ? 'hidden' : 'online' });
+        }
+      }
+      if (cb) cb({ success: true });
+    } catch (e) { if (cb) cb({ success: false }); }
+  });
+
+  // ── ЗАБЛОКИРОВАТЬ / РАЗБЛОКИРОВАТЬ ПОЛЬЗОВАТЕЛЯ (личная блокировка) ──
+  socket.on('block_user', async ({ target, block }, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false });
+    try {
+      if (block) {
+        await User.updateOne({ username: me }, { $addToSet: { blockedUsers: target } });
+      } else {
+        await User.updateOne({ username: me }, { $pull: { blockedUsers: target } });
+      }
+      cb({ success: true });
+    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  });
+
+  // ── ПОЛУЧИТЬ ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ──
+  socket.on('get_user_profile', async (username, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false });
+    try {
+      const user = await User.findOne({ username: username.toLowerCase() });
+      if (!user) return cb({ success: false, error: 'Не найден' });
+      const isOnline = userSockets.has(user.username);
+      cb({ success: true, profile: {
+        username: user.username,
+        displayName: user.displayName,
+        avatar: user.avatar,
+        bio: user.bio || '',
+        status: user.hideOnline ? 'hidden' : (isOnline ? (user.status || 'online') : 'offline'),
+        createdAt: user.createdAt,
+        isOnline: user.hideOnline ? false : isOnline,
+      }});
+    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  });
+
+  // ── ПОИСК ПО СООБЩЕНИЯМ В ЧАТЕ ──
+  socket.on('search_messages', async ({ chatKey, query }, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me || !query || query.length < 2) return cb({ success: false, results: [] });
+    try {
+      let filter = { text: { $regex: query, $options: 'i' }, type: 'text' };
+      if (chatKey.startsWith('group_')) {
+        filter.groupId = chatKey.replace('group_', '');
+        filter.chatType = 'group';
+      } else {
+        filter.chatType = 'direct';
+        filter.chatId = [me, chatKey].sort().join('_');
+      }
+      const msgs = await Message.find(filter).sort({ timestamp: -1 }).limit(30);
+      cb({ success: true, results: msgs });
+    } catch (e) { cb({ success: false, results: [] }); }
+  });
+
+  // ── ЗАКРЕПИТЬ СООБЩЕНИЕ В ГРУППЕ ──
+  socket.on('pin_message', async ({ groupId, messageId }, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false });
+    try {
+      const group = await Group.findById(groupId);
+      if (!group) return cb({ success: false, error: 'Группа не найдена' });
+      if (!group.admins.includes(me) && group.owner !== me) return cb({ success: false, error: 'Нет прав' });
+      group.pinnedMessage = messageId || null;
+      await group.save();
+      // Уведомить всех участников
+      for (const member of group.members) {
+        const sid = userSockets.get(member);
+        if (sid) io.to(sid).emit('message_pinned', { groupId, messageId, pinnedBy: me });
+      }
+      cb({ success: true });
+    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  });
+
+  // ── ПОЛУЧИТЬ ЗАКРЕПЛЁННОЕ СООБЩЕНИЕ ──
+  socket.on('get_pinned_message', async (groupId, cb) => {
+    try {
+      const group = await Group.findById(groupId);
+      if (!group?.pinnedMessage) return cb({ success: true, message: null });
+      const msg = await Message.findById(group.pinnedMessage);
+      cb({ success: true, message: msg });
+    } catch (e) { cb({ success: false, message: null }); }
+  });
+
+
+  // ══════════════════════════════════════════
+  //  КАНАЛЫ
+  // ══════════════════════════════════════════
+  socket.on('create_channel', async (data, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      const { name, username, description, isPrivate } = data;
+      if (!name?.trim()) return cb({ success: false, error: 'Нужно название' });
+      // Проверить уникальность username
+      if (username) {
+        const taken = await Channel.findOne({ username: username.toLowerCase() });
+        if (taken) return cb({ success: false, error: 'Username канала уже занят' });
+        if (!/^[a-z0-9_]{3,32}$/.test(username.toLowerCase()))
+          return cb({ success: false, error: 'Username: 3-32 символа, только a-z, 0-9, _' });
+      }
+      const channel = await Channel.create({
+        name: name.trim(), username: username?.toLowerCase() || null,
+        description: description || '', isPrivate: !!isPrivate,
+        owner: me, admins: [me], subscribers: [me]
+      });
+      cb({ success: true, channel });
+    } catch(e) { console.error(e); cb({ success: false, error: 'Ошибка сервера' }); }
+  });
+
+  socket.on('search_channels', async (query, cb) => {
+    try {
+      const channels = await Channel.find({
+        isPrivate: false,
+        $or: [
+          { name: { $regex: query, $options: 'i' } },
+          { username: { $regex: query, $options: 'i' } }
+        ]
+      }).limit(15);
+      cb({ success: true, channels });
+    } catch(e) { cb({ success: false, channels: [] }); }
+  });
+
+  socket.on('subscribe_channel', async (channelId, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false });
+    try {
+      const ch = await Channel.findByIdAndUpdate(channelId, { $addToSet: { subscribers: me } }, { new: true });
+      if (!ch) return cb({ success: false, error: 'Канал не найден' });
+      cb({ success: true, channel: ch });
+    } catch(e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  socket.on('unsubscribe_channel', async (channelId, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false });
+    try {
+      await Channel.findByIdAndUpdate(channelId, { $pull: { subscribers: me } });
+      cb({ success: true });
+    } catch(e) { cb({ success: false }); }
+  });
+
+  socket.on('update_channel', async (data, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false });
+    try {
+      const { channelId, name, username, description, avatar, isPrivate } = data;
+      const ch = await Channel.findById(channelId);
+      if (!ch) return cb({ success: false, error: 'Не найден' });
+      if (ch.owner !== me && !ch.admins.includes(me)) return cb({ success: false, error: 'Нет прав' });
+      if (username && username !== ch.username) {
+        const taken = await Channel.findOne({ username: username.toLowerCase() });
+        if (taken) return cb({ success: false, error: 'Username занят' });
+      }
+      if (name) ch.name = name.trim();
+      if (username !== undefined) ch.username = username?.toLowerCase() || null;
+      if (description !== undefined) ch.description = description;
+      if (avatar !== undefined) ch.avatar = avatar;
+      if (isPrivate !== undefined) ch.isPrivate = isPrivate;
+      await ch.save();
+      // Уведомить подписчиков
+      for (const sub of ch.subscribers) {
+        const sid = userSockets.get(sub);
+        if (sid) io.to(sid).emit('channel_updated', ch);
+      }
+      cb({ success: true, channel: ch });
+    } catch(e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  });
+
+  socket.on('send_channel_message', async (data, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false });
+    try {
+      const { channelId, text, type, audioData, videoData } = data;
+      const ch = await Channel.findById(channelId);
+      if (!ch) return cb({ success: false, error: 'Канал не найден' });
+      if (!ch.admins.includes(me)) return cb({ success: false, error: 'Только админы могут писать' });
+      const msg = await Message.create({
+        chatId: `channel_${channelId}`, chatType: 'channel',
+        from: me, groupId: channelId, text: text || '', type: type || 'text',
+        audioData: audioData || null,
+      });
+      for (const sub of ch.subscribers) {
+        const sid = userSockets.get(sub);
+        if (sid) io.to(sid).emit('new_channel_message', { ...msg.toObject(), channelId, channelName: ch.name });
+      }
+      cb({ success: true, message: msg });
+    } catch(e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  socket.on('load_channel_chat', async (channelId, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false });
+    try {
+      const msgs = await Message.find({ chatId: `channel_${channelId}`, chatType: 'channel' }).sort({ timestamp: 1 }).limit(100);
+      cb({ success: true, messages: msgs });
+    } catch(e) { cb({ success: false, messages: [] }); }
+  });
+
+  socket.on('delete_channel', async (channelId, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false });
+    try {
+      const ch = await Channel.findById(channelId);
+      if (!ch || ch.owner !== me) return cb({ success: false, error: 'Нет прав' });
+      await Channel.findByIdAndDelete(channelId);
+      await Message.deleteMany({ chatId: `channel_${channelId}` });
+      for (const sub of ch.subscribers) {
+        const sid = userSockets.get(sub);
+        if (sid) io.to(sid).emit('channel_deleted', { channelId });
+      }
+      cb({ success: true });
+    } catch(e) { cb({ success: false }); }
   });
 
   // ══════════════════════════════════════════
@@ -666,13 +966,18 @@ io.on('connection', (socket) => {
   // ══════════════════════════════════════════
 
   // Инициатор -> вызываемый
-  socket.on('call_offer', (data) => {
+  socket.on('call_offer', async (data) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return;
-    const { to, offer } = data;
+    const { to, offer, callType = 'audio' } = data;
     const s = userSockets.get(to.toLowerCase());
-    if (s) io.to(s).emit('incoming_call', { from: me, offer });
-    else socket.emit('call_failed', { reason: 'Пользователь не в сети' });
+    if (s) {
+      io.to(s).emit('incoming_call', { from: me, offer, callType });
+    } else {
+      // Сохранить пропущенный звонок
+      try { await CallLog.create({ from: me, to: to.toLowerCase(), type: callType, status: 'missed', duration: 0 }); } catch(e) {}
+      socket.emit('call_failed', { reason: `${to} сейчас не в сети. Звонок записан как пропущенный.` });
+    }
   });
 
   // Вызываемый принял -> отправляем answer инициатору
@@ -694,21 +999,42 @@ io.on('connection', (socket) => {
   });
 
   // Завершить звонок
-  socket.on('call_end', (data) => {
+  socket.on('call_end', async (data) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return;
-    const { to } = data;
+    const { to, duration = 0, callType = 'audio' } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) io.to(s).emit('call_ended', { from: me });
+    // Сохранить в историю
+    try {
+      const status = duration > 0 ? 'completed' : 'cancelled';
+      await CallLog.create({ from: me, to: to.toLowerCase(), type: callType, status, duration });
+    } catch(e) { console.error('CallLog save error:', e); }
   });
 
   // Отклонить звонок
-  socket.on('call_reject', (data) => {
+  socket.on('call_reject', async (data) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return;
-    const { to } = data;
+    const { to, callType = 'audio' } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) io.to(s).emit('call_rejected', { from: me });
+    // Сохранить пропущенный
+    try {
+      await CallLog.create({ from: to.toLowerCase(), to: me, type: callType, status: 'missed', duration: 0 });
+    } catch(e) {}
+  });
+
+  // Получить историю звонков
+  socket.on('get_call_history', async ({ withUser }, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, logs: [] });
+    try {
+      const logs = await CallLog.find({
+        $or: [{ from: me, to: withUser }, { from: withUser, to: me }]
+      }).sort({ timestamp: -1 }).limit(20);
+      cb({ success: true, logs });
+    } catch(e) { cb({ success: false, logs: [] }); }
   });
 
   // ── ОТКЛЮЧЕНИЕ ──

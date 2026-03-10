@@ -5,7 +5,7 @@ import {
   Crown, X, Menu, Mic, MicOff, Play, Pause, Ban, History,
   Plus, UserCheck, Hash, Settings, Phone, PhoneOff, Check,
   MoreVertical, Forward, Pencil, Users, Palette, Camera, AtSign,
-  Pin, PinOff, Eye, EyeOff, Clock, Coffee, BellOff, Info, MessageSquare,
+  Pin, PinOff, Eye, EyeOff, Clock, Info, MessageSquare,
   Radio, Video, VideoOff, PhoneMissed, PhoneIncoming, PhoneCall, Tv2
 } from 'lucide-react';
 
@@ -182,7 +182,7 @@ function IncomingCallOverlay({ from, fromDisplay, fromAvatar, onAccept, onReject
   );
 }
 
-function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, onToggleVideo, videoEnabled, calling, audioRef, remoteStream, callType, localVideoRef, remoteVideoRef }) {
+function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, calling, audioRef, remoteStream, callType, localVideoRef, remoteVideoRef }) {
   const fmt = s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
   const localRef = useRef(null);
   const resolved = audioRef||localRef;
@@ -191,28 +191,28 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
     const el = resolved.current;
     if (!el) return;
     el.srcObject = remoteStream;
-    const tryPlay = () => el.play().catch(err => { console.warn('overlay play err', err); setTimeout(tryPlay, 800); });
+    const tryPlay = () => el.play().catch(() => setTimeout(tryPlay, 800));
     tryPlay();
-    // Видео
-    if (remoteVideoRef?.current) { remoteVideoRef.current.srcObject = remoteStream; remoteVideoRef.current.play().catch(()=>{}); }
+    if (remoteVideoRef?.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+      remoteVideoRef.current.play().catch(()=>{});
+    }
   }, [remoteStream]);
   const isVideo = callType === 'video';
   return (
     <div className="fixed inset-0 flex items-center justify-center z-[200]" style={{background:'rgba(0,0,0,0.92)',backdropFilter:'blur(20px)',animation:'fadeIn 0.2s ease'}}>
-      {/* Remote video background */}
-      {isVideo&&<video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover opacity-80"/>}
-      <div className={`rounded-3xl p-8 text-center shadow-2xl relative z-10 ${isVideo?'w-96':'w-80'}`} style={{background:isVideo?'rgba(0,0,0,0.6)':'#111116',border:'1px solid rgba(255,255,255,0.08)'}}>
-        {/* Local video preview */}
-        {isVideo&&videoEnabled&&<video ref={localVideoRef} autoPlay muted playsInline className="absolute top-4 right-4 w-24 h-24 rounded-2xl object-cover" style={{border:'1px solid rgba(255,255,255,0.2)'}}/>}
+      {isVideo&&<video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" style={{opacity:0.85}}/>}
+      <div className={`rounded-3xl p-8 text-center shadow-2xl relative z-10 ${isVideo?'w-96':'w-80'}`} style={{background:isVideo?'rgba(0,0,0,0.55)':'#111116',border:'1px solid rgba(255,255,255,0.08)'}}>
+        {isVideo&&<video ref={localVideoRef} autoPlay muted playsInline className="absolute top-4 right-4 w-28 h-28 rounded-2xl object-cover" style={{border:'2px solid rgba(255,255,255,0.25)',boxShadow:'0 4px 20px rgba(0,0,0,0.5)'}}/>}
         <div className="mb-4 flex justify-center">
-          {!isVideo&&<Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="lg" />}
+          {!isVideo&&<Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="lg"/>}
+          {isVideo&&<div className="w-16 h-16 rounded-full overflow-hidden border-2 border-white/20"><Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="lg"/></div>}
         </div>
         <p className="text-white text-xl font-bold mb-1">{peerDisplay||peer}</p>
-        {calling ? <p className="text-white/30 text-sm mb-6 animate-pulse">Вызов...</p> : <p className="text-green-400 text-sm mb-6 font-mono tracking-widest">{fmt(duration)}</p>}
+        <p className={`text-sm mb-6 font-mono ${calling?'text-white/30 animate-pulse tracking-wide':'text-green-400 tracking-widest'}`}>{calling?'Вызов...':fmt(duration)}</p>
         <div className="flex justify-center gap-4">
-          {!calling&&<button onClick={onMute} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105 border ${muted?'border-yellow-500/30 bg-yellow-500/10':'border-white/10 bg-white/5'}`}>{muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/50"/>}</button>}
-          {!calling&&isVideo&&<button onClick={onToggleVideo} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105 border ${!videoEnabled?'border-red-500/30 bg-red-500/10':'border-white/10 bg-white/5'}`}>{videoEnabled?<Video className="w-5 h-5 text-white/50"/>:<VideoOff className="w-5 h-5 text-red-400"/>}</button>}
-          <button onClick={onEnd} className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105" style={{background:'rgba(239,68,68,0.2)',border:'1px solid rgba(239,68,68,0.4)'}}><PhoneOff className="w-6 h-6 text-red-400"/></button>
+          {!calling&&<button onClick={onMute} title={muted?'Включить микрофон':'Выключить микрофон'} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105 border ${muted?'border-yellow-500/30 bg-yellow-500/10':'border-white/10 bg-white/5'}`}>{muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/50"/>}</button>}
+          <button onClick={onEnd} title="Завершить" className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105" style={{background:'rgba(239,68,68,0.2)',border:'1px solid rgba(239,68,68,0.4)'}}><PhoneOff className="w-6 h-6 text-red-400"/></button>
         </div>
       </div>
       <audio ref={resolved} id="remoteAudio" autoPlay playsInline />
@@ -316,7 +316,7 @@ export default function WhisprPro() {
   // Счётчики непрочитанных
   const [unreadCounts, setUnreadCounts] = useState({});
   // Статус пользователя
-  const [myStatus, setMyStatus] = useState('online');
+  // status removed
   // Каналы
   const [channels, setChannels] = useState([]);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
@@ -570,7 +570,7 @@ export default function WhisprPro() {
         if(res.success){
           setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);
           const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;
-          setAvatars(av);setUsername(u);setPassword(p);setMyStatus(res.user.status||'online');setIsAuthenticated(true);
+          setAvatars(av);setUsername(u);setPassword(p);setIsAuthenticated(true);
         } else { localStorage.removeItem('whispr_creds'); }
         setAutoLoginLoading(false);
       });
@@ -587,7 +587,7 @@ export default function WhisprPro() {
   useEffect(()=>{if(activeChat){setChatVisible(false);setTimeout(()=>setChatVisible(true),50);}},[activeChat?.id]);
 
   const handleRegister = e => { e.preventDefault();setAuthError('');socket.emit('register',{username,displayName,password},res=>{if(res.success)handleLogin(e);else setAuthError(res.error);}); };
-  const handleLogin = e => { e.preventDefault();setAuthError('');socket.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){}setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setMyStatus(res.user.status||'online');setIsAuthenticated(true);}else setAuthError(res.error);}); };
+  const handleLogin = e => { e.preventDefault();setAuthError('');socket.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){}setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
   const handleLogout = () => { cleanupCall();try{localStorage.removeItem('whispr_creds');}catch(e){}setIsAuthenticated(false);setCurrentUser(null);setContacts([]);setGroups([]);setActiveChat(null);setMessages({});setUsername('');setPassword('');setDisplayName(''); };
 
   const handleAvatarUpload = (e, fromSettings=false) => {
@@ -691,12 +691,7 @@ export default function WhisprPro() {
     });
   };
 
-  const handleSetStatus = (status) => {
-    setMyStatus(status);
-    socket.emit('set_status', status, (res) => {
-      if (!res?.success) console.warn('Status not saved');
-    });
-  };
+
 
   const handleViewProfile = (username) => {
     if (!socket || !username) return;
@@ -709,13 +704,23 @@ export default function WhisprPro() {
   const handleCreateChannel = (e) => {
     e.preventDefault();
     if (!channelForm.name.trim()) return;
-    socket.emit('create_channel', channelForm, res => {
+    if (!socket) { alert('Нет соединения'); return; }
+    const payload = {
+      name: channelForm.name.trim(),
+      username: channelForm.username.trim() || null,
+      description: channelForm.description.trim(),
+      isPrivate: channelForm.isPrivate
+    };
+    socket.emit('create_channel', payload, res => {
+      if (!res) { alert('Нет ответа от сервера'); return; }
       if (res.success) {
         setChannels(p => [...p, res.channel]);
         setShowCreateChannel(false);
         setChannelForm({name:'',username:'',description:'',isPrivate:false});
         openChannelChat(res.channel);
-      } else alert(res.error);
+      } else {
+        alert('Ошибка: ' + (res.error || 'неизвестная'));
+      }
     });
   };
 
@@ -901,11 +906,7 @@ export default function WhisprPro() {
             <div className="flex-1 min-w-0">
               <div className="text-white/80 font-semibold text-sm truncate">{currentUser?.displayName}</div>
               <div className="flex items-center gap-1.5">
-                <button onClick={()=>handleSetStatus(myStatus==='online'?'away':myStatus==='away'?'dnd':'online')} className="flex items-center gap-1 hover:opacity-80 transition-opacity" title="Сменить статус">
-                  {myStatus==='online'&&<><span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0"></span><span className="text-[10px] text-white/25">онлайн</span></>}
-                  {myStatus==='away'&&<><Coffee className="w-3 h-3 text-yellow-400 flex-shrink-0"/><span className="text-[10px] text-white/25">отошёл</span></>}
-                  {myStatus==='dnd'&&<><BellOff className="w-3 h-3 text-red-400 flex-shrink-0"/><span className="text-[10px] text-white/25">не беспокоить</span></>}
-                </button>
+<span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0"></span>
               </div>
             </div>
             <div className="flex gap-0.5 flex-shrink-0">
@@ -1006,9 +1007,12 @@ export default function WhisprPro() {
                   {activeChat.type==='direct'?(activeChatData?.isOnline?<span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"></span>онлайн</span>:'не в сети'):activeChat.type==='channel'?<span>{activeChatData?.isPrivate?'🔒 Приватный':'📢 Канал'} · {activeChatData?.subscribers?.length||0} подп.</span>:`${activeChatData?.members?.length||0} участников`}
                 </div>
               </div>
-              {activeChat.type==='direct'&&activeChatData?.isOnline&&callState==='idle'&&(
-                <button onClick={()=>startCall(activeChat.id)} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0"><Phone className="w-5 h-5 text-white/30 hover:text-green-400 transition-colors" /></button>
-              )}
+
+              {activeChat.type==='direct'&&callState==='idle'&&(<>
+                <button onClick={()=>startCall(activeChat.id,'audio')} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Аудио звонок"><Phone className="w-4 h-4 text-white/40 hover:text-green-400 transition-colors"/></button>
+                <button onClick={()=>startCall(activeChat.id,'video')} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Видео звонок"><Video className="w-4 h-4 text-white/40 hover:text-blue-400 transition-colors"/></button>
+                <button onClick={()=>{setShowCallHistory(true);loadCallHistory(activeChat.id);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="История звонков"><PhoneCall className="w-4 h-4 text-white/25 hover:text-white/50 transition-colors"/></button>
+              </>)}
               <button onClick={()=>{setShowMsgSearch(s=>!s);setMsgSearchQuery('');setMsgSearchResults([]);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Поиск по сообщениям"><Search className="w-4 h-4 text-white/30 hover:text-white/60 transition-colors"/></button>
               {activeChat.type==='group'&&<button onClick={()=>setShowGroupInfo(true)} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0"><Settings className="w-4 h-4 text-white/30" /></button>}
             </div>
@@ -1087,7 +1091,18 @@ export default function WhisprPro() {
                       ):(
                         <div className={`rounded-2xl px-4 py-2.5 ${isOwn?'rounded-br-sm':'rounded-bl-sm'} transition-all`}
                           style={isOwn?{background:`linear-gradient(135deg,${T.a}cc,${T.b}cc)`,border:'1px solid rgba(255,255,255,0.08)'}:{background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.05)'}}>
-                          {msg.type==='video'?(
+                          {msg.type==='call_log'?(
+                            <div className="flex items-center gap-2.5 py-0.5">
+                              {msg.callStatus==='missed'?<PhoneMissed className="w-4 h-4 text-red-400 flex-shrink-0"/>:msg.callStatus==='completed'?<PhoneIncoming className="w-4 h-4 text-green-400 flex-shrink-0"/>:<PhoneOff className="w-4 h-4 text-white/30 flex-shrink-0"/>}
+                              <div>
+                                <div className={`text-sm font-medium ${msg.callStatus==='missed'?'text-red-400':msg.callStatus==='completed'?'text-green-400/90':'text-white/40'}`}>
+                                  {msg.callStatus==='missed'?'Пропущенный звонок':msg.callStatus==='completed'?`Звонок · ${fmtDur(msg.callDuration||0)}`:msg.callSubtype==='video'?'Видеозвонок отменён':'Звонок отменён'}
+                                </div>
+                                <div className="text-xs text-white/25 flex items-center gap-1">{msg.callSubtype==='video'?<Video className="w-3 h-3"/>:<Phone className="w-3 h-3"/>}{msg.callSubtype==='video'?'Видео':'Аудио'}</div>
+                              </div>
+                              {isOwn&&<button onClick={()=>startCall(activeChat.id, msg.callSubtype||'audio')} className="ml-2 p-1.5 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0" title="Перезвонить"><Phone className="w-3.5 h-3.5 text-white/40"/></button>}
+                            </div>
+                          ):msg.type==='video'?(
                             <div className="relative">
                               <video src={msg.audioData} className="w-40 h-40 rounded-full object-cover cursor-pointer" style={{border:`2px solid ${isOwn?'rgba(255,255,255,0.2)':'rgba(255,255,255,0.1)'}`}}
                                 onClick={e=>{const v=e.target;if(v.paused){v.play();setPlayingVideo(mid);}else{v.pause();setPlayingVideo(null);}}} playsInline />
@@ -1245,11 +1260,7 @@ export default function WhisprPro() {
                     style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)'}}
                     placeholder="Расскажи о себе..." rows={2} maxLength={200}/>
                 </div>
-                {/* Скрыть онлайн */}
-                <label className="flex items-center justify-between px-4 py-3 rounded-xl cursor-pointer" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)'}}>
-                  <div className="flex items-center gap-3"><Eye className="w-4 h-4 text-white/30"/><span className="text-white/60 text-sm">Скрыть статус «онлайн»</span></div>
-                  <input type="checkbox" checked={currentUser?.hideOnline||false} onChange={e=>{const v=e.target.checked;socket.emit('set_hide_online',v,res=>{if(res.success)setCurrentUser(p=>({...p,hideOnline:v}));});}} className="w-4 h-4"/>
-                </label>
+
                 <button onClick={handleSaveProfile} disabled={savingProfile}
                   className="w-full py-3 rounded-xl text-white font-semibold text-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
                   style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
@@ -1389,11 +1400,8 @@ export default function WhisprPro() {
                 <div className="text-white font-bold text-xl">{viewingProfile.displayName}</div>
                 <div className="text-white/30 text-sm">@{viewingProfile.username}</div>
                 <div className="flex items-center justify-center gap-1.5 mt-1.5">
-                  {viewingProfile.status==='online'&&<><span className="w-2 h-2 rounded-full bg-green-400"></span><span className="text-green-400 text-xs">онлайн</span></>}
-                  {viewingProfile.status==='away'&&<><Coffee className="w-3.5 h-3.5 text-yellow-400"/><span className="text-yellow-400 text-xs">отошёл</span></>}
-                  {viewingProfile.status==='dnd'&&<><BellOff className="w-3.5 h-3.5 text-red-400"/><span className="text-red-400 text-xs">не беспокоить</span></>}
-                  {viewingProfile.status==='offline'&&<><span className="w-2 h-2 rounded-full bg-gray-600"></span><span className="text-white/25 text-xs">не в сети</span></>}
-                  {viewingProfile.status==='hidden'&&<><EyeOff className="w-3.5 h-3.5 text-white/25"/><span className="text-white/25 text-xs">скрыт</span></>}
+                  {viewingProfile.isOnline&&<><span className="w-2 h-2 rounded-full bg-green-400"></span><span className="text-green-400 text-xs">онлайн</span></>}
+                  {!viewingProfile.isOnline&&<><span className="w-2 h-2 rounded-full bg-gray-600"></span><span className="text-white/25 text-xs">не в сети</span></>}
                 </div>
               </div>
             </div>
@@ -1555,7 +1563,7 @@ export default function WhisprPro() {
 
       {/* ══ CALLS ══ */}
       {callState==='incoming'&&<IncomingCallOverlay from={callPeer} fromDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} fromAvatar={avatars[callPeer]} onAccept={acceptCall} onReject={rejectCall}/>}
-      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} onToggleVideo={toggleVideo} videoEnabled={videoEnabled} calling={callState==='calling'} audioRef={remoteAudioRef} remoteStream={remoteStreamRef.current} callType={callType} localVideoRef={localVideoRef} remoteVideoRef={remoteVideoRef}/>}
+      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} audioRef={remoteAudioRef} remoteStream={remoteStreamRef.current} callType={callType} localVideoRef={localVideoRef} remoteVideoRef={remoteVideoRef}/>}
 
       <div style={{position:'fixed',bottom:8,left:'50%',transform:'translateX(-50%)',color:'rgba(255,255,255,0.07)',fontSize:'10px',pointerEvents:'none',letterSpacing:'0.15em',zIndex:100}}>by Meowlentii</div>
       <style>{CSS}</style>
