@@ -6,7 +6,7 @@ import {
   Plus, UserCheck, Hash, Settings, Phone, PhoneOff, Check,
   MoreVertical, Forward, Pencil, Users, Palette, Camera, AtSign,
   Pin, PinOff, Eye, EyeOff, Clock, Info, MessageSquare,
-  Radio, Video, VideoOff, PhoneMissed, PhoneIncoming, PhoneCall, Tv2
+  Radio, Video, VideoOff, PhoneMissed, PhoneIncoming, PhoneCall, Tv2, CornerUpLeft, Reply
 } from 'lucide-react';
 
 const SERVER_URL = 'https://whispr-server-u5zy.onrender.com';
@@ -309,6 +309,7 @@ export default function WhisprPro() {
   const [msgSearchQuery, setMsgSearchQuery] = useState('');
   const [msgSearchResults, setMsgSearchResults] = useState([]);
   const [msgSearchLoading, setMsgSearchLoading] = useState(false);
+  const [replyTo, setReplyTo] = useState(null); // {_id, from, text, type}
   // Закреплённое сообщение
   const [pinnedMessage, setPinnedMessage] = useState(null);
   // Профиль пользователя
@@ -638,7 +639,7 @@ export default function WhisprPro() {
   const handleSearch = q=>{setSearchQuery(q);if(q.length<2){setSearchResults([]);return;}socket.emit('search_users',q,res=>{if(res.success)setSearchResults(res.results);});};
   const handleAddContact = u=>{socket.emit('add_contact',u,res=>{if(res.success){setContacts(p=>[...p,res.contact]);if(res.contact.avatar)setAvatars(p=>({...p,[res.contact.username]:res.contact.avatar}));setSearchResults([]);setSearchQuery('');setShowSearch(false);}});};
   const handleRemoveContact = u=>{if(!confirm(`Удалить ${u}?`))return;socket.emit('remove_contact',u,res=>{if(res.success){setContacts(p=>p.filter(c=>c.username!==u));if(activeChat?.id===u)setActiveChat(null);}});};
-  const openDirectChat = c=>{setActiveChat({type:'direct',id:c.username,data:c});setShowSearch(false);setUnreadCounts(p=>({...p,[c.username]:0}));socket.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});};
+  const openDirectChat = c=>{setActiveChat({type:'direct',id:c.username,data:c});setShowSearch(false);setReplyTo(null);setUnreadCounts(p=>({...p,[c.username]:0}));socket.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});};
   const openChannelChat = (ch) => {
     setActiveChat({type:'channel', id:ch._id, data:ch});
     setUnreadCounts(p=>({...p,[`channel_${ch._id}`]:0}));
@@ -1004,7 +1005,13 @@ export default function WhisprPro() {
               <div className="flex-1 min-w-0">
                 <div className="text-white/90 font-semibold truncate">{activeChat.type==='direct'?activeChatData?.displayName:activeChatData?.name}</div>
                 <div className="text-xs text-white/25">
-                  {activeChat.type==='direct'?(activeChatData?.isOnline?<span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"></span>онлайн</span>:'не в сети'):activeChat.type==='channel'?<span>{activeChatData?.isPrivate?'🔒 Приватный':'📢 Канал'} · {activeChatData?.subscribers?.length||0} подп.</span>:`${activeChatData?.members?.length||0} участников`}
+                  {activeChat.type==='direct'
+                    ? (activeChatData?.isOnline
+                      ? <span style={{color:'#4ade80',fontSize:'12px'}} className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0"></span>онлайн</span>
+                      : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>не в сети</span>)
+                    : activeChat.type==='channel'
+                    ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>{activeChatData?.isPrivate?'🔒 Приватный':'📢 Публичный'} · {activeChatData?.subscribers?.length||0} подп.</span>
+                    : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>{activeChatData?.members?.length||0} участников</span>}
                 </div>
               </div>
 
@@ -1014,7 +1021,8 @@ export default function WhisprPro() {
                 <button onClick={()=>{setShowCallHistory(true);loadCallHistory(activeChat.id);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="История звонков"><PhoneCall className="w-4 h-4 text-white/25 hover:text-white/50 transition-colors"/></button>
               </>)}
               <button onClick={()=>{setShowMsgSearch(s=>!s);setMsgSearchQuery('');setMsgSearchResults([]);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Поиск по сообщениям"><Search className="w-4 h-4 text-white/30 hover:text-white/60 transition-colors"/></button>
-              {activeChat.type==='group'&&<button onClick={()=>setShowGroupInfo(true)} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0"><Settings className="w-4 h-4 text-white/30" /></button>}
+              {activeChat.type==='group'&&<button onClick={()=>setShowGroupInfo(true)} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0"><Settings className="w-4 h-4 text-white/30"/></button>}
+              {activeChat.type==='channel'&&<button onClick={()=>{setEditingChannel(activeChatData);setChannelSettingsForm({name:activeChatData?.name||'',username:activeChatData?.username||'',description:activeChatData?.description||'',isPrivate:!!activeChatData?.isPrivate});setShowChannelSettings(true);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Настройки канала"><Settings className="w-4 h-4 text-white/30"/></button>}
             </div>
 
             {/* Поиск по сообщениям */}
@@ -1064,8 +1072,16 @@ export default function WhisprPro() {
                 const reactions=msg.reactions||{};
                 const hasR=Object.keys(reactions).some(e=>reactions[e]?.length>0);
                 const isEditing=editingMsgId===mid;
+                // Дата-разделитель
+                const msgDate=new Date(msg.timestamp);
+                const prevMsg=chatMessages[idx-1];
+                const showDateSep=!prevMsg||new Date(prevMsg.timestamp).toDateString()!==msgDate.toDateString();
+                const todayD=new Date();const yesterdayD=new Date(todayD);yesterdayD.setDate(todayD.getDate()-1);
+                const dateLbl=msgDate.toDateString()===todayD.toDateString()?'Сегодня':msgDate.toDateString()===yesterdayD.toDateString()?'Вчера':msgDate.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
                 return (
-                  <div key={mid} className={`flex items-end gap-2 ${isOwn?'flex-row-reverse':'flex-row'}`}
+                  <React.Fragment key={mid}>
+                  {showDateSep&&<div className="flex justify-center my-3"><span className="px-3 py-1 rounded-full text-xs" style={{background:'rgba(255,255,255,0.06)',color:'rgba(255,255,255,0.3)'}}>{dateLbl}</span></div>}
+                  <div className={`flex items-end gap-2 ${isOwn?'flex-row-reverse':'flex-row'}`}
                     style={{animation:isOwn&&idx===chatMessages.length-1?'sendBubble 0.35s cubic-bezier(0.34,1.56,0.64,1) both':`msgIn 0.2s ease ${Math.min(idx,20)*0.015}s both`}}
                     onMouseEnter={()=>{clearTimeout(hoverTimeoutRef.current);setHoveredMsg(mid);}}
                     onMouseLeave={()=>{hoverTimeoutRef.current=setTimeout(()=>setHoveredMsg(null),300);}}>
@@ -1091,6 +1107,12 @@ export default function WhisprPro() {
                       ):(
                         <div className={`rounded-2xl px-4 py-2.5 ${isOwn?'rounded-br-sm':'rounded-bl-sm'} transition-all`}
                           style={isOwn?{background:`linear-gradient(135deg,${T.a}cc,${T.b}cc)`,border:'1px solid rgba(255,255,255,0.08)'}:{background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.05)'}}>
+                          {msg.replyFrom&&(
+                            <div className="mb-1.5 px-2.5 py-1.5 rounded-lg text-xs" style={{background:'rgba(255,255,255,0.07)',borderLeft:`2px solid ${T.a}`}}>
+                              <div className="font-semibold mb-0.5" style={{color:T.a}}>{msg.replyFrom}</div>
+                              <div className="text-white/40 truncate">{msg.replyText||'...'}</div>
+                            </div>
+                          )}
                           {msg.type==='call_log'?(
                             <div className="flex items-center gap-2.5 py-0.5">
                               {msg.callStatus==='missed'?<PhoneMissed className="w-4 h-4 text-red-400 flex-shrink-0"/>:msg.callStatus==='completed'?<PhoneIncoming className="w-4 h-4 text-green-400 flex-shrink-0"/>:<PhoneOff className="w-4 h-4 text-white/30 flex-shrink-0"/>}
@@ -1103,10 +1125,26 @@ export default function WhisprPro() {
                               {isOwn&&<button onClick={()=>startCall(activeChat.id, msg.callSubtype||'audio')} className="ml-2 p-1.5 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0" title="Перезвонить"><Phone className="w-3.5 h-3.5 text-white/40"/></button>}
                             </div>
                           ):msg.type==='video'?(
-                            <div className="relative">
-                              <video src={msg.audioData} className="w-40 h-40 rounded-full object-cover cursor-pointer" style={{border:`2px solid ${isOwn?'rgba(255,255,255,0.2)':'rgba(255,255,255,0.1)'}`}}
-                                onClick={e=>{const v=e.target;if(v.paused){v.play();setPlayingVideo(mid);}else{v.pause();setPlayingVideo(null);}}} playsInline />
-                              {playingVideo!==mid&&<div className="absolute inset-0 flex items-center justify-center rounded-full" style={{background:'rgba(0,0,0,0.35)'}}><Play className="w-10 h-10 text-white/80"/></div>}
+                            <div className="relative w-40 h-40 flex-shrink-0">
+                              <video
+                                src={msg.audioData}
+                                className="w-40 h-40 rounded-full object-cover"
+                                style={{border:`2px solid ${isOwn?'rgba(255,255,255,0.25)':'rgba(255,255,255,0.12)'}`}}
+                                playsInline
+                                preload="metadata"
+                                onPlay={()=>setPlayingVideo(mid)}
+                                onPause={()=>setPlayingVideo(null)}
+                                onEnded={()=>setPlayingVideo(null)}
+                              />
+                              {playingVideo!==mid&&(
+                                <div
+                                  className="absolute inset-0 flex items-center justify-center rounded-full cursor-pointer"
+                                  style={{background:'rgba(0,0,0,0.38)'}}
+                                  onClick={()=>{const v=document.querySelector(`video[data-mid="${mid}"]`);if(v){v.play();}else{const all=document.querySelectorAll('video');all.forEach(el=>{if(el.src===msg.audioData||el.currentSrc===msg.audioData)el.play();});}}}
+                                >
+                                  <Play className="w-10 h-10 text-white/90"/>
+                                </div>
+                              )}
                             </div>
                           ):msg.type==='voice'?(
                             <div className="flex items-center gap-3 min-w-36">
@@ -1137,6 +1175,7 @@ export default function WhisprPro() {
                       )}
                     </div>
                   </div>
+                  </React.Fragment>
                 );
               })}
               <div ref={messagesEndRef}/>
@@ -1145,6 +1184,16 @@ export default function WhisprPro() {
 
             {/* Input */}
             <div className="flex-shrink-0 px-4 py-4" style={{borderTop:'1px solid rgba(255,255,255,0.05)',background:'rgba(0,0,0,0.15)'}}>
+              {replyTo&&(
+                <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-xl" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)'}}>
+                  <Reply className="w-3.5 h-3.5 text-white/30 flex-shrink-0"/>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium" style={{color:T.a}}>{replyTo.from}</div>
+                    <div className="text-xs text-white/40 truncate">{replyTo.type==='voice'?'🎤 Голосовое':replyTo.type==='video'?'📹 Видео':replyTo.text}</div>
+                  </div>
+                  <button onClick={()=>setReplyTo(null)} className="p-1 rounded-lg hover:bg-white/5 flex-shrink-0"><X className="w-3.5 h-3.5 text-white/25"/></button>
+                </div>
+              )}
               {isVideoRecording?(
                 <div className="flex items-center gap-3 px-2 py-2 rounded-2xl" style={{background:'rgba(99,102,241,0.08)',border:'1px solid rgba(99,102,241,0.2)',animation:'fadeIn 0.2s ease'}}>
                   <video ref={videoPreviewRef} muted playsInline className="w-16 h-16 rounded-full object-cover flex-shrink-0" style={{border:'2px solid rgba(99,102,241,0.4)'}}/>
@@ -1185,6 +1234,7 @@ export default function WhisprPro() {
       {/* ══ CONTEXT MENU ══ */}
       {msgMenu&&(
         <div className="fixed z-50 rounded-xl overflow-hidden shadow-2xl w-44" style={{top:220,left:'50%',transform:'translateX(-50%)',background:'rgba(8,8,14,0.97)',border:'1px solid rgba(255,255,255,0.07)',animation:'popIn 0.15s ease'}} onClick={e=>e.stopPropagation()}>
+          <button onClick={()=>{setReplyTo(msgMenu.msg);setMsgMenu(null);}} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><CornerUpLeft className="w-4 h-4 text-white/40"/>Ответить</button>
           <button onClick={()=>{setForwardMsg(msgMenu.msg);setShowForwardModal(true);setMsgMenu(null);}} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><Forward className="w-4 h-4 text-blue-400"/>Переслать</button>
           {activeChat?.type==='group'&&activeChatData?.admins?.includes(currentUser?.username)&&(
             <button onClick={()=>handlePinMessage(msgMenu.msg)} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors">
@@ -1490,10 +1540,29 @@ export default function WhisprPro() {
       {/* ══ НАСТРОЙКИ КАНАЛА ══ */}
       {showChannelSettings&&editingChannel&&(
         <Modal onClose={()=>setShowChannelSettings(false)}>
-          <div className="p-6">
+          <div className="p-6" style={{maxHeight:'80vh',overflowY:'auto'}}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-white/70 font-semibold flex items-center gap-2"><Radio className="w-4 h-4"/>Настройки канала</h3>
               <button onClick={()=>setShowChannelSettings(false)} className="p-1.5 rounded-lg hover:bg-white/5"><X className="w-4 h-4 text-white/30"/></button>
+            </div>
+            {/* Аватар канала */}
+            <div className="flex justify-center mb-4">
+              <label className="relative cursor-pointer group">
+                <div className="w-20 h-20 rounded-full flex items-center justify-center overflow-hidden" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
+                  {channelSettingsForm.avatar
+                    ? <img src={channelSettingsForm.avatar} className="w-full h-full object-cover" alt=""/>
+                    : <Radio className="w-8 h-8 text-white/60"/>}
+                </div>
+                <div className="absolute inset-0 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" style={{background:'rgba(0,0,0,0.5)'}}>
+                  <Camera className="w-6 h-6 text-white"/>
+                </div>
+                <input type="file" accept="image/*" className="hidden" onChange={e=>{
+                  const f=e.target.files[0];if(!f)return;
+                  const r=new FileReader();
+                  r.onloadend=()=>setChannelSettingsForm(p=>({...p,avatar:r.result}));
+                  r.readAsDataURL(f);
+                }}/>
+              </label>
             </div>
             <form onSubmit={handleUpdateChannel} className="space-y-3">
               <input type="text" value={channelSettingsForm.name||''} onChange={e=>setChannelSettingsForm(p=>({...p,name:e.target.value}))} required
@@ -1503,18 +1572,31 @@ export default function WhisprPro() {
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/20 text-sm">@</span>
                 <input type="text" value={channelSettingsForm.username||''} onChange={e=>setChannelSettingsForm(p=>({...p,username:e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,'')}))}
                   className="w-full pl-8 pr-4 py-3 rounded-xl text-white/80 text-sm outline-none placeholder-white/20"
-                  style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.07)'}} placeholder="username канала"/>
+                  style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.07)'}} placeholder="username (для поиска)"/>
               </div>
               <textarea value={channelSettingsForm.description||''} onChange={e=>setChannelSettingsForm(p=>({...p,description:e.target.value}))} rows={2}
                 className="w-full px-4 py-3 rounded-xl text-white/80 text-sm outline-none placeholder-white/20 resize-none"
-                style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.07)'}} placeholder="Описание"/>
-              <label className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer" style={{background:'rgba(255,255,255,0.03)'}}>
-                <input type="checkbox" checked={channelSettingsForm.isPrivate||false} onChange={e=>setChannelSettingsForm(p=>({...p,isPrivate:e.target.checked}))} className="w-4 h-4"/>
-                <div><div className="text-white/60 text-sm">Приватный</div><div className="text-white/25 text-xs">Скрыт из поиска</div></div>
+                style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.07)'}} placeholder="Описание канала"/>
+              <label className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.05)'}}>
+                <input type="checkbox" checked={channelSettingsForm.isPrivate||false} onChange={e=>setChannelSettingsForm(p=>({...p,isPrivate:e.target.checked}))} className="w-4 h-4 accent-violet-500"/>
+                <div><div className="text-white/60 text-sm">🔒 Приватный канал</div><div className="text-white/25 text-xs">Скрыт из поиска, доступ только по ссылке</div></div>
               </label>
-              <button type="submit" className="w-full py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>Сохранить</button>
-              <button type="button" onClick={()=>{if(confirm('Удалить канал?'))socket.emit('delete_channel',editingChannel._id,res=>{if(res.success)setShowChannelSettings(false);});}}
-                className="w-full py-2.5 rounded-xl text-red-400/70 text-sm hover:bg-red-500/8 transition-colors" style={{border:'1px solid rgba(239,68,68,0.15)'}}>Удалить канал</button>
+              {/* Ссылка приглашения */}
+              <div className="px-3 py-3 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.05)'}}>
+                <div className="text-white/25 text-xs mb-1.5">🔗 Ссылка на канал</div>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 text-white/50 text-xs font-mono truncate px-2 py-1.5 rounded-lg" style={{background:'rgba(0,0,0,0.3)'}}>
+                    {`${window.location.origin}?channel=${editingChannel._id}`}
+                  </div>
+                  <button type="button" onClick={()=>{navigator.clipboard.writeText(`${window.location.origin}?channel=${editingChannel._id}`).then(()=>alert('Скопировано!'));}}
+                    className="px-3 py-1.5 rounded-lg text-xs text-white/50 hover:bg-white/10 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.08)'}}>
+                    Копировать
+                  </button>
+                </div>
+              </div>
+              <button type="submit" className="w-full py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 transition-opacity" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>💾 Сохранить</button>
+              <button type="button" onClick={()=>{if(confirm('Удалить канал навсегда?'))socket.emit('delete_channel',editingChannel._id,res=>{if(res.success){setShowChannelSettings(false);setChannels(p=>p.filter(x=>x._id!==editingChannel._id));setActiveChat(null);}});}}
+                className="w-full py-2.5 rounded-xl text-red-400/70 text-sm hover:bg-red-500/8 transition-colors" style={{border:'1px solid rgba(239,68,68,0.15)'}}>🗑 Удалить канал</button>
             </form>
           </div>
         </Modal>

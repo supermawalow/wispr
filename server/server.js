@@ -63,7 +63,10 @@ const messageSchema = new mongoose.Schema({
   reactions:     { type: Map, of: [String], default: {} },
   edited:        { type: Boolean, default: false },
   forwarded:     { type: Boolean, default: false },
-  forwardedFrom: { type: String, default: null }
+  forwardedFrom: { type: String, default: null },
+  replyToId:     { type: String, default: null },
+  replyFrom:     { type: String, default: null },
+  replyText:     { type: String, default: null }
 });
 
 const adminLogSchema = new mongoose.Schema({
@@ -252,7 +255,7 @@ io.on('connection', (socket) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return cb({ success: false, error: 'Не авторизован' });
     try {
-      const { to, text, type, audioData } = data;
+      const { to, text, type, audioData, replyToId, replyFrom, replyText } = data;
       const recipientSocket = userSockets.get(to.toLowerCase());
       const msg = await Message.create({
         chatId: getChatId(me, to.toLowerCase()), chatType: 'direct',
