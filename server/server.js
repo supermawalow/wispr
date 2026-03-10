@@ -8,7 +8,8 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: { origin: "*", methods: ["GET", "POST"], credentials: true },
-  transports: ['websocket', 'polling']
+  transports: ['websocket', 'polling'],
+  maxHttpBufferSize: 50e6  // 50MB — для голосовых и видео сообщений
 });
 
 app.use(cors({ origin: "*", credentials: true }));
@@ -66,7 +67,9 @@ const messageSchema = new mongoose.Schema({
   forwardedFrom: { type: String, default: null },
   replyToId:     { type: String, default: null },
   replyFrom:     { type: String, default: null },
-  replyText:     { type: String, default: null }
+  replyText:     { type: String, default: null },
+  fileName:      { type: String, default: null },
+  fileMime:      { type: String, default: null }
 });
 
 const adminLogSchema = new mongoose.Schema({
@@ -176,7 +179,9 @@ io.on('connection', (socket) => {
       const statusEmit = user.hideOnline ? null : { username: user.username, isOnline: true, status: user.status || 'online' };
       if (statusEmit) io.emit('user_status_change', statusEmit);
 
-      cb({ success: true, user: { ...user.toObject(), password: undefined }, contacts, groups });
+      // Каналы пользователя
+      const userChannels = await Channel.find({ subscribers: user.username });
+      cb({ success: true, user: { ...user.toObject(), password: undefined }, contacts, groups, channels: userChannels });
     } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
   });
 
@@ -261,7 +266,10 @@ io.on('connection', (socket) => {
         chatId: getChatId(me, to.toLowerCase()), chatType: 'direct',
         from: me, to: to.toLowerCase(),
         text: text || '', type: type || 'text', audioData: audioData || null,
-        delivered: !!recipientSocket, read: false
+        replyToId: replyToId || null, replyFrom: replyFrom || null, replyText: replyText || null,
+        delivered: !!recipientSocket, read: false,
+        replyToId: replyToId || null, replyFrom: replyFrom || null, replyText: replyText || null,
+        fileName: data.fileName || null, fileMime: data.fileMime || null
       });
       socket.emit('new_message', msg);
       if (recipientSocket) io.to(recipientSocket).emit('new_message', msg);
@@ -313,7 +321,7 @@ io.on('connection', (socket) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return cb({ success: false, error: 'Не авторизован' });
     try {
-      const { groupId, text, type, audioData } = data;
+      const { groupId, text, type, audioData, replyToId, replyFrom, replyText } = data;
       const group = await Group.findById(groupId);
       if (!group) return cb({ success: false, error: 'Группа не найдена' });
       if (!group.members.includes(me)) return cb({ success: false, error: 'Нет доступа' });
@@ -321,6 +329,7 @@ io.on('connection', (socket) => {
         chatId: getGroupChatId(groupId), chatType: 'group',
         from: me, to: '', groupId,
         text: text || '', type: type || 'text', audioData: audioData || null,
+        replyToId: replyToId || null, replyFrom: replyFrom || null, replyText: replyText || null,
         delivered: true, read: false
       });
       // Рассылаем всем участникам группы
@@ -649,6 +658,7 @@ io.on('connection', (socket) => {
   //  КАНАЛЫ
   // ══════════════════════════════════════════
   socket.on('create_channel', async (data, cb) => {
+    console.log('create_channel called by', onlineUsers.get(socket.id), data?.name);
     const me = onlineUsers.get(socket.id);
     if (!me) return cb({ success: false, error: 'Не авторизован' });
     try {

@@ -6,7 +6,7 @@ import {
   Plus, UserCheck, Hash, Settings, Phone, PhoneOff, Check,
   MoreVertical, Forward, Pencil, Users, Palette, Camera, AtSign,
   Pin, PinOff, Eye, EyeOff, Clock, Info, MessageSquare,
-  Radio, Video, VideoOff, PhoneMissed, PhoneIncoming, PhoneCall, Tv2, CornerUpLeft, Reply
+  Radio, Video, VideoOff, PhoneMissed, PhoneIncoming, PhoneCall, Tv2, CornerUpLeft, Reply, Paperclip, FileText, Download, Globe
 } from 'lucide-react';
 
 const SERVER_URL = 'https://whispr-server-u5zy.onrender.com';
@@ -310,6 +310,10 @@ export default function WhisprPro() {
   const [msgSearchResults, setMsgSearchResults] = useState([]);
   const [msgSearchLoading, setMsgSearchLoading] = useState(false);
   const [replyTo, setReplyTo] = useState(null); // {_id, from, text, type}
+  const [drafts, setDrafts] = useState({});
+  const [mentionQuery, setMentionQuery] = useState(''); // текущий @query
+  const [mentionList, setMentionList] = useState([]); // подходящие участники // { chatKey: text }
+  const draftsRef = useRef({});
   // Закреплённое сообщение
   const [pinnedMessage, setPinnedMessage] = useState(null);
   // Профиль пользователя
@@ -342,6 +346,10 @@ export default function WhisprPro() {
   const videoTimerRef = useRef(null);
   const videoPreviewRef = useRef(null);
   const [playingVideo, setPlayingVideo] = useState(null);
+  const [sendingFile, setSendingFile] = useState(false);
+  const fileInputRef = useRef(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [linkPreviews, setLinkPreviews] = useState({}); // {msgId: {title,desc,image,url}} // {data, name, type}
   // Кнопка звонка всегда видна
   const [callType, setCallType] = useState('audio'); // audio | video
   // Горячая клавиша Esc
@@ -639,7 +647,11 @@ export default function WhisprPro() {
   const handleSearch = q=>{setSearchQuery(q);if(q.length<2){setSearchResults([]);return;}socket.emit('search_users',q,res=>{if(res.success)setSearchResults(res.results);});};
   const handleAddContact = u=>{socket.emit('add_contact',u,res=>{if(res.success){setContacts(p=>[...p,res.contact]);if(res.contact.avatar)setAvatars(p=>({...p,[res.contact.username]:res.contact.avatar}));setSearchResults([]);setSearchQuery('');setShowSearch(false);}});};
   const handleRemoveContact = u=>{if(!confirm(`Удалить ${u}?`))return;socket.emit('remove_contact',u,res=>{if(res.success){setContacts(p=>p.filter(c=>c.username!==u));if(activeChat?.id===u)setActiveChat(null);}});};
-  const openDirectChat = c=>{setActiveChat({type:'direct',id:c.username,data:c});setShowSearch(false);setReplyTo(null);setUnreadCounts(p=>({...p,[c.username]:0}));socket.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});};
+  const openDirectChat = c=>{
+    setActiveChat({type:'direct',id:c.username,data:c});
+    setShowSearch(false);setReplyTo(null);setUnreadCounts(p=>({...p,[c.username]:0}));
+    const draft = draftsRef.current[c.username] || '';
+    setText(draft);socket.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});};
   const openChannelChat = (ch) => {
     setActiveChat({type:'channel', id:ch._id, data:ch});
     setUnreadCounts(p=>({...p,[`channel_${ch._id}`]:0}));
@@ -651,6 +663,8 @@ export default function WhisprPro() {
   const openGroupChat = g=>{
     setActiveChat({type:'group',id:g._id,data:g});
     setUnreadCounts(p=>({...p,[`group_${g._id}`]:0}));
+    const draft = draftsRef.current[`group_${g._id}`] || '';
+    setText(draft);
     socket.emit('load_group_chat',g._id,res=>{if(res.success)setMessages(p=>({...p,[`group_${g._id}`]:res.messages}));});
     // Загрузить закреплённое
     socket.emit('get_pinned_message', g._id, res=>{if(res.success&&res.message)setPinnedMessage(p=>({...p,[g._id]:res.message}));});
@@ -661,8 +675,32 @@ export default function WhisprPro() {
   const submitEdit = e=>{e.preventDefault();if(!editText.trim())return;socket.emit('edit_message',{messageId:editingMsgId,newText:editText.trim()},res=>{if(res.success){setEditingMsgId(null);setEditText('');}});};
   const deleteMsg = (msg,forAll)=>{socket.emit('delete_message',{messageId:msg._id||msg.id,deleteFor:forAll?'all':'me'},()=>{});setMsgMenu(null);};
   const submitForward = to=>{socket.emit('forward_message',{messageId:forwardMsg._id||forwardMsg.id,toUsername:to},res=>{if(res.success){setShowForwardModal(false);setForwardMsg(null);const c=contacts.find(x=>x.username===to);if(c)openDirectChat(c);}});};
-  const startRecording = async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});const mr=new MediaRecorder(stream);mediaRecorderRef.current=mr;audioChunksRef.current=[];mr.ondataavailable=e=>audioChunksRef.current.push(e.data);mr.onstop=()=>{const blob=new Blob(audioChunksRef.current,{type:'audio/webm'});const r=new FileReader();r.onloadend=()=>{if(activeChat.type==='direct')socket.emit('send_message',{to:activeChat.id,text:'',type:'voice',audioData:r.result},()=>{});else socket.emit('send_group_message',{groupId:activeChat.id,text:'',type:'voice',audioData:r.result},()=>{});};r.readAsDataURL(blob);stream.getTracks().forEach(t=>t.stop());};mr.start();setIsRecording(true);setRecordingTime(0);recordingTimerRef.current=setInterval(()=>setRecordingTime(t=>t+1),1000);}catch{alert('Нет доступа к микрофону');}};
-  const stopRecording = ()=>{mediaRecorderRef.current?.stop();clearInterval(recordingTimerRef.current);setIsRecording(false);setRecordingTime(0);};
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+      const mr = new MediaRecorder(stream, {mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm'});
+      mediaRecorderRef.current = mr;
+      audioChunksRef.current = [];
+      mr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      mr.onstop = () => {
+        const chat = activeChatRef.current;
+        if (!chat) return;
+        const blob = new Blob(audioChunksRef.current, {type:'audio/webm'});
+        const r = new FileReader();
+        r.onloadend = () => {
+          const audioData = r.result;
+          if (chat.type === 'direct') socket.emit('send_message', {to:chat.id, text:'', type:'voice', audioData}, res => { if(!res?.success) console.error('Voice send failed:', res); });
+          else if (chat.type === 'group') socket.emit('send_group_message', {groupId:chat.id, text:'', type:'voice', audioData}, res => { if(!res?.success) console.error('Voice group send failed:', res); });
+        };
+        r.readAsDataURL(blob);
+        stream.getTracks().forEach(t => t.stop());
+      };
+      mr.start(100); // chunk every 100ms
+      setIsRecording(true); setRecordingTime(0);
+      recordingTimerRef.current = setInterval(() => setRecordingTime(t => t+1), 1000);
+    } catch(e) { alert('Нет доступа к микрофону: ' + e.message); }
+  };
+  const stopRecording = () => { mediaRecorderRef.current?.stop(); clearInterval(recordingTimerRef.current); setIsRecording(false); setRecordingTime(0); };
   const toggleAudio = (id,data)=>{if(playingAudio===id){setPlayingAudio(null);return;}setPlayingAudio(id);const a=new Audio(data);a.onended=()=>setPlayingAudio(null);a.play();};
   const handleReaction = (mid,emoji)=>{socket.emit('add_reaction',{messageId:mid,emoji},()=>{});setHoveredMsg(null);};
   const handleCreateGroup = e=>{e.preventDefault();if(!newGroupName.trim())return;socket.emit('create_group',{name:newGroupName,description:newGroupDesc,members:selectedMembers},res=>{if(res.success){setShowCreateGroup(false);setNewGroupName('');setNewGroupDesc('');setSelectedMembers([]);openGroupChat(res.group);}});};
@@ -761,8 +799,11 @@ export default function WhisprPro() {
         const blob = new Blob(videoChunksRef.current, {type:'video/webm'});
         const r = new FileReader();
         r.onloadend = () => {
-          if (activeChat?.type==='direct') socket.emit('send_message',{to:activeChat.id,text:'',type:'video',audioData:r.result},()=>{});
-          else if (activeChat?.type==='group') socket.emit('send_group_message',{groupId:activeChat.id,text:'',type:'video',audioData:r.result},()=>{});
+          const chat = activeChatRef.current;
+          if (!chat) return;
+          const videoData = r.result;
+          if (chat.type==='direct') socket.emit('send_message',{to:chat.id,text:'',type:'video',audioData:videoData}, res=>{ if(!res?.success) console.error('Video send failed:', res); });
+          else if (chat.type==='group') socket.emit('send_group_message',{groupId:chat.id,text:'',type:'video',audioData:videoData}, res=>{ if(!res?.success) console.error('Video group send failed:', res); });
         };
         r.readAsDataURL(blob);
         stream.getTracks().forEach(t=>t.stop());
@@ -796,6 +837,62 @@ export default function WhisprPro() {
       if (localVideoRef.current) localVideoRef.current.srcObject = null;
       setVideoEnabled(false);
     }
+  };
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const maxMB = file.type.startsWith('video/') ? 40 : file.type.startsWith('image/') ? 10 : 15;
+    if (file.size > maxMB * 1024 * 1024) { alert(`Файл слишком большой (макс ${maxMB}МБ)`); return; }
+    const r = new FileReader();
+    r.onloadend = () => {
+      if (file.type.startsWith('image/')) {
+        setImagePreview({data: r.result, name: file.name, type: 'image'});
+      } else {
+        // Отправляем сразу не-изображения
+        sendFile(r.result, file.name, file.type);
+      }
+    };
+    r.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const fetchLinkPreview = async (msgId, text) => {
+    if (linkPreviews[msgId]) return;
+    const urlMatch = text.match(/https?:\/\/[^\s]+/);
+    if (!urlMatch) return;
+    const url = urlMatch[0];
+    try {
+      setLinkPreviews(p=>({...p,[msgId]:{loading:true,url}}));
+      const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`);
+      const data = await res.json();
+      const html = data.contents||'';
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i) ||
+                        html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']description["']/i) ||
+                        html.match(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']+)["']/i);
+      const imgMatch  = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i);
+      const title = titleMatch?.[1]?.trim()?.slice(0,80);
+      const desc  = descMatch?.[1]?.trim()?.slice(0,120);
+      const image = imgMatch?.[1];
+      if (title) setLinkPreviews(p=>({...p,[msgId]:{url,title,desc,image,loading:false}}));
+      else setLinkPreviews(p=>({...p,[msgId]:{url,loading:false,failed:true}}));
+    } catch(e) { setLinkPreviews(p=>({...p,[msgId]:{loading:false,failed:true,url}})); }
+  };
+
+  const sendFile = (data, name, mimeType) => {
+    const chat = activeChatRef.current;
+    if (!chat || !socket) return;
+    setSendingFile(true);
+    const isImage = mimeType.startsWith('image/');
+    const isVideo = mimeType.startsWith('video/');
+    const msgType = isImage ? 'image' : isVideo ? 'video_file' : 'file';
+    const payload = {text: name, type: msgType, audioData: data, fileName: name, fileMime: mimeType};
+    const cb = (res) => { setSendingFile(false); if (!res?.success) alert('Ошибка отправки файла'); };
+    if (chat.type==='direct') socket.emit('send_message', {to:chat.id, ...payload}, cb);
+    else if (chat.type==='group') socket.emit('send_group_message', {groupId:chat.id, ...payload}, cb);
+    else if (chat.type==='channel') socket.emit('send_channel_message', {channelId:chat.id, ...payload}, cb);
+    setImagePreview(null);
   };
 
   const handlePinMessage = (msg) => {
@@ -948,6 +1045,7 @@ export default function WhisprPro() {
               <Avatar username={c.username} displayName={c.displayName} avatar={avatars[c.username]} size="sm" online={c.isOnline} />
               <div className="flex-1 min-w-0">
                 <div className={`text-sm font-medium truncate ${activeChat?.type==='direct'&&activeChat.id===c.username?'text-white':'text-white/60'}`}>{c.displayName}</div>
+                {drafts[c.username]&&activeChat?.id!==c.username&&<div className="text-xs text-white/25 truncate flex items-center gap-1"><span style={{color:T.a,fontSize:'10px'}}>Черновик:</span>{drafts[c.username]}</div>}
                 <div className="text-xs text-white/20 truncate">@{c.username}</div>
               </div>
               {(unreadCounts[c.username]||0)>0 && <span className="flex-shrink-0 min-w-[18px] h-[18px] rounded-full text-[10px] font-bold text-white flex items-center justify-center px-1" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{unreadCounts[c.username]}</span>}
@@ -1113,6 +1211,25 @@ export default function WhisprPro() {
                               <div className="text-white/40 truncate">{msg.replyText||'...'}</div>
                             </div>
                           )}
+                          {/* Превью ссылки */}
+                          {msg.type==='text'&&msg.text&&/https?:\/\//.test(msg.text)&&(()=>{
+                            const msgId = msg._id||msg.id;
+                            if (!linkPreviews[msgId]) { setTimeout(()=>fetchLinkPreview(msgId,msg.text),100); }
+                            const lp = linkPreviews[msgId];
+                            if (!lp||lp.loading||lp.failed) return null;
+                            return (
+                              <a href={lp.url} target="_blank" rel="noopener noreferrer"
+                                className="block mt-2 rounded-xl overflow-hidden hover:opacity-90 transition-opacity"
+                                style={{background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.08)',textDecoration:'none'}}>
+                                {lp.image&&<img src={lp.image} alt="" className="w-full h-28 object-cover" onError={e=>e.target.style.display='none'}/>}
+                                <div className="px-3 py-2">
+                                  <div className="text-xs font-semibold text-white/80 truncate">{lp.title}</div>
+                                  {lp.desc&&<div className="text-xs text-white/35 mt-0.5 line-clamp-2">{lp.desc}</div>}
+                                  <div className="text-xs mt-1 flex items-center gap-1" style={{color:T.a}}><Globe className="w-3 h-3"/>{new URL(lp.url).hostname}</div>
+                                </div>
+                              </a>
+                            );
+                          })()}
                           {msg.type==='call_log'?(
                             <div className="flex items-center gap-2.5 py-0.5">
                               {msg.callStatus==='missed'?<PhoneMissed className="w-4 h-4 text-red-400 flex-shrink-0"/>:msg.callStatus==='completed'?<PhoneIncoming className="w-4 h-4 text-green-400 flex-shrink-0"/>:<PhoneOff className="w-4 h-4 text-white/30 flex-shrink-0"/>}
@@ -1146,6 +1263,25 @@ export default function WhisprPro() {
                                 </div>
                               )}
                             </div>
+                          ):msg.type==='image'?(
+                            <div className="relative max-w-xs">
+                              <img src={msg.audioData} alt={msg.text||'фото'} className="rounded-2xl max-w-full cursor-pointer hover:opacity-90 transition-opacity"
+                                style={{maxHeight:'300px',objectFit:'cover'}}
+                                onClick={()=>window.open(msg.audioData,'_blank')}/>
+                            </div>
+                          ):msg.type==='video_file'?(
+                            <div className="max-w-xs">
+                              <video src={msg.audioData} controls className="rounded-2xl max-w-full" style={{maxHeight:'300px'}} playsInline/>
+                            </div>
+                          ):msg.type==='file'?(
+                            <div className="flex items-center gap-3 px-4 py-3 rounded-2xl min-w-48" style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.07)'}}>
+                              <FileText className="w-8 h-8 flex-shrink-0 text-white/50"/>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm text-white/80 truncate font-medium">{msg.text||'Файл'}</div>
+                                <div className="text-xs text-white/30">Документ</div>
+                              </div>
+                              <a href={msg.audioData} download={msg.text||'file'} className="p-2 rounded-xl hover:bg-white/10 transition-colors flex-shrink-0"><Download className="w-4 h-4 text-white/50"/></a>
+                            </div>
                           ):msg.type==='voice'?(
                             <div className="flex items-center gap-3 min-w-36">
                               <button onClick={()=>toggleAudio(mid,msg.audioData)} className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all hover:scale-105" style={{background:'rgba(255,255,255,0.15)'}}>
@@ -1155,7 +1291,13 @@ export default function WhisprPro() {
                               <Mic className="w-3 h-3 text-white/30 flex-shrink-0"/>
                             </div>
                           ):(
-                            <div style={{color:"rgba(255,255,255,0.92)",fontSize:"14px",lineHeight:"1.5",wordBreak:"break-word"}}>{msg.text}</div>
+                            <div style={{color:"rgba(255,255,255,0.92)",fontSize:"14px",lineHeight:"1.5",wordBreak:"break-word"}}>
+                              {msg.text.split(/(@\w+)/g).map((part,i)=>
+                                part.startsWith('@')
+                                  ? <span key={i} style={{color:T.a,fontWeight:600}}>{part}</span>
+                                  : part
+                              )}
+                            </div>
                           )}
                           <div className="flex items-center justify-end gap-1 mt-0.5">
                             {msg.edited&&<span className="text-[10px] text-white/25">ред.</span>}
@@ -1184,6 +1326,37 @@ export default function WhisprPro() {
 
             {/* Input */}
             <div className="flex-shrink-0 px-4 py-4" style={{borderTop:'1px solid rgba(255,255,255,0.05)',background:'rgba(0,0,0,0.15)'}}>
+              {mentionList.length>0&&(
+                <div className="mb-2 rounded-xl overflow-hidden" style={{background:'rgba(10,10,14,0.98)',border:'1px solid rgba(255,255,255,0.08)'}}>
+                  {mentionList.map(m=>(
+                    <button key={m} type="button"
+                      onClick={()=>{
+                        const atIdx=text.lastIndexOf('@');
+                        setText(text.slice(0,atIdx)+'@'+m+' ');
+                        setMentionList([]);
+                      }}
+                      className="w-full px-4 py-2.5 text-left flex items-center gap-2.5 hover:bg-white/5 transition-colors">
+                      <Avatar username={m} displayName={m} avatar={avatars[m]} size="xs"/>
+                      <span className="text-white/70 text-sm">@{m}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {imagePreview&&(
+                <div className="flex items-center gap-3 mb-2 px-3 py-2 rounded-xl" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)'}}>
+                  <img src={imagePreview.data} alt="" className="w-12 h-12 rounded-lg object-cover flex-shrink-0"/>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-white/60 truncate">{imagePreview.name}</div>
+                    <div className="text-xs text-white/25">Изображение</div>
+                  </div>
+                  <button onClick={()=>sendFile(imagePreview.data, imagePreview.name, 'image/jpeg')} disabled={sendingFile}
+                    className="px-3 py-1.5 rounded-lg text-xs text-white font-medium flex-shrink-0 hover:opacity-90 disabled:opacity-50"
+                    style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
+                    {sendingFile?'...':'Отправить'}
+                  </button>
+                  <button onClick={()=>setImagePreview(null)} className="p-1 rounded-lg hover:bg-white/5 flex-shrink-0"><X className="w-3.5 h-3.5 text-white/25"/></button>
+                </div>
+              )}
               {replyTo&&(
                 <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-xl" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)'}}>
                   <Reply className="w-3.5 h-3.5 text-white/30 flex-shrink-0"/>
@@ -1213,6 +1386,8 @@ export default function WhisprPro() {
                     className="flex-1 px-4 py-3 rounded-2xl text-white/90 text-sm outline-none placeholder-white/15 min-w-0 transition-all"
                     style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)'}}
                     placeholder="Напишите сообщение..."/>
+                  <input ref={fileInputRef} type="file" accept="image/*,video/*,.pdf,.doc,.docx,.txt,.zip" className="hidden" onChange={handleFileSelect}/>
+                  <button type="button" onClick={()=>fileInputRef.current?.click()} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Прикрепить файл"><Paperclip className="w-5 h-5 text-white/25"/></button>
                   <button type="button" onClick={startRecording} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}}><Mic className="w-5 h-5 text-white/25"/></button>
                   <button type="button" onClick={startVideoRecording} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Видео-сообщение"><Video className="w-5 h-5 text-white/25"/></button>
                   <button type="submit" className="px-5 py-3 rounded-2xl font-medium text-white text-sm flex items-center gap-2 flex-shrink-0 transition-all hover:opacity-85 active:scale-95"
