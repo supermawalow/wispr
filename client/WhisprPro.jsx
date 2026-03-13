@@ -218,7 +218,7 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
             <div className="flex gap-4">
               {!calling&&(
                 <button onClick={onMute}
-                  className={`w-13 h-13 w-12 h-12 rounded-full flex items-center justify-center transition-all active:scale-90 ${muted?'border border-yellow-500/50':'border border-white/15'}`}
+                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all active:scale-90 ${muted?'border border-yellow-500/50':'border border-white/15'}`}
                   style={{background:muted?'rgba(234,179,8,0.2)':'rgba(255,255,255,0.1)'}}>
                   {muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/60"/>}
                 </button>
@@ -399,8 +399,8 @@ export default function WhisprPro() {
   const [showCallHistory, setShowCallHistory] = useState(false);
   // Видео-звонок
   const [videoEnabled, setVideoEnabled] = useState(false);
-  const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
+  const localVidRef = useRef(null);   // <video> для своей камеры в звонке
+  const remoteVidRef = useRef(null);  // <video> для камеры собеседника в звонке
   // Кружочки (видео-сообщения)
   const [isVideoRecording, setIsVideoRecording] = useState(false);
   const [videoRecordingTime, setVideoRecordingTime] = useState(0);
@@ -475,6 +475,7 @@ export default function WhisprPro() {
         video: isVideo ? { facingMode:'user', width:{ideal:640}, height:{ideal:480} } : false
       });
       localStreamRef.current = stream;
+      if (isVideo && localVidRef.current) { localVidRef.current.srcObject = stream; localVidRef.current.play().catch(()=>{}); }
       setCallType(ct);
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
@@ -482,9 +483,9 @@ export default function WhisprPro() {
       pc.ontrack = e => {
         const s = e.streams?.[0] || new MediaStream([e.track]);
         remoteStreamRef.current = s;
-        setRemoteStreamState(s); // триггерим ре-рендер чтобы overlay получил стрим
-        const tryAudio = () => { const a=remoteAudioRef.current||document.getElementById('remoteAudio'); if(a){a.srcObject=s;a.play().catch(()=>{});} };
-        tryAudio(); setTimeout(tryAudio, 500);
+        setRemoteStreamState(s);
+        if (remoteAudioRef.current) { remoteAudioRef.current.srcObject = s; remoteAudioRef.current.play().catch(()=>{}); }
+        if (remoteVidRef.current && isVideo) { remoteVidRef.current.srcObject = s; remoteVidRef.current.play().catch(()=>{}); }
       };
       pc.onicecandidate = e => { if(e.candidate) socketRef.current?.emit('ice_candidate',{to:toUsername,candidate:e.candidate}); };
       pc.onconnectionstatechange = () => { if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); };
@@ -503,15 +504,16 @@ export default function WhisprPro() {
         video: isVideo ? { facingMode:'user', width:{ideal:640}, height:{ideal:480} } : false
       });
       localStreamRef.current = stream;
+      if (isVideo && localVidRef.current) { localVidRef.current.srcObject = stream; localVidRef.current.play().catch(()=>{}); }
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
       pc.ontrack = e => {
         const s = e.streams?.[0] || new MediaStream([e.track]);
         remoteStreamRef.current = s;
-        setRemoteStreamState(s); // триггерим ре-рендер чтобы overlay получил стрим
-        const tryAudio = () => { const a=remoteAudioRef.current||document.getElementById('remoteAudio'); if(a){a.srcObject=s;a.play().catch(()=>{});} };
-        tryAudio(); setTimeout(tryAudio, 500);
+        setRemoteStreamState(s);
+        if (remoteAudioRef.current) { remoteAudioRef.current.srcObject = s; remoteAudioRef.current.play().catch(()=>{}); }
+        if (remoteVidRef.current && isVideo) { remoteVidRef.current.srcObject = s; remoteVidRef.current.play().catch(()=>{}); }
       };
       pc.onicecandidate = e => { if(e.candidate) socketRef.current?.emit('ice_candidate',{to:callPeerRef.current,candidate:e.candidate}); };
       pc.onconnectionstatechange = () => { if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); };
@@ -975,7 +977,7 @@ export default function WhisprPro() {
       try {
         const vs = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
         vs.getVideoTracks().forEach(t => localStreamRef.current.addTrack(t));
-        if (localVideoRef.current) { localVideoRef.current.srcObject = localStreamRef.current; localVideoRef.current.play().catch(()=>{}); }
+        if (localVidRef.current) { localVidRef.current.srcObject = localStreamRef.current; localVidRef.current.play().catch(()=>{}); }
         peerConnectionRef.current?.getSenders().forEach(s => { if(s.track?.kind==='audio'){} });
         // add video track to peer connection
         vs.getVideoTracks().forEach(t => peerConnectionRef.current?.addTrack(t, localStreamRef.current));
@@ -983,7 +985,7 @@ export default function WhisprPro() {
       } catch(e) { alert('Нет доступа к камере'); }
     } else {
       localStreamRef.current.getVideoTracks().forEach(t => { t.stop(); localStreamRef.current.removeTrack(t); });
-      if (localVideoRef.current) localVideoRef.current.srcObject = null;
+      if (localVidRef.current) localVidRef.current.srcObject = null;
       setVideoEnabled(false);
     }
   };
@@ -2159,7 +2161,7 @@ export default function WhisprPro() {
 
       {/* ══ CALLS ══ */}
       {callState==='incoming'&&<IncomingCallOverlay from={callPeer} fromDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} fromAvatar={avatars[callPeer]} onAccept={acceptCall} onReject={rejectCall}/>}
-      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} localStream={localStreamRef.current} remoteStream={remoteStreamState} callType={callType}/>}
+      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} localVidRef={localVidRef} remoteVidRef={remoteVidRef} remoteAudioRef={remoteAudioRef} callType={callType}/>}
 
       {/* ── LIGHTBOX — полноэкранный просмотр фото ── */}
       {lightbox&&(
