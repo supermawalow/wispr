@@ -1128,30 +1128,32 @@ app.get('/api/link-preview', async (req, res) => {
 });
 
 // ══════════════════════════════════════════
-//  AI CHAT ENDPOINT (Anthropic Claude)
-//  Set ANTHROPIC_API_KEY in Render env vars
+//  AI CHAT ENDPOINT (Groq — бесплатно, без карты)
+//  Добавь GROQ_API_KEY в переменные окружения Render
+//  Получить ключ: console.groq.com → API Keys → Create API Key
 // ══════════════════════════════════════════
 app.post('/api/ai-chat', async (req, res) => {
   const { messages } = req.body;
   if (!messages || !Array.isArray(messages)) return res.json({ error: 'invalid messages' });
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return res.json({ error: 'AI не настроен. Добавьте ANTHROPIC_API_KEY в переменные окружения Render.' });
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return res.json({ error: 'AI не настроен. Добавьте GROQ_API_KEY в переменные окружения Render (получить бесплатно на console.groq.com).' });
   try {
     const body = JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'llama-3.3-70b-versatile',
       max_tokens: 1024,
-      system: 'Ты Whispr AI — умный помощник внутри мессенджера Whispr. Отвечай кратко, дружелюбно, на русском языке если пользователь пишет на русском.',
-      messages: messages.slice(-20) // последние 20 сообщений для контекста
+      messages: [
+        { role: 'system', content: 'Ты Whispr AI — умный помощник внутри мессенджера Whispr. Отвечай кратко, дружелюбно, на русском языке если пользователь пишет на русском.' },
+        ...messages.slice(-20) // последние 20 сообщений для контекста
+      ]
     });
     const resp = await new Promise((resolve, reject) => {
       const req2 = https_mod.request({
-        hostname: 'api.anthropic.com',
-        path: '/v1/messages',
+        hostname: 'api.groq.com',
+        path: '/openai/v1/chat/completions',
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
+          'Authorization': `Bearer ${apiKey}`,
           'Content-Length': Buffer.byteLength(body)
         }
       }, r => {
@@ -1165,8 +1167,8 @@ app.post('/api/ai-chat', async (req, res) => {
       req2.write(body);
       req2.end();
     });
-    if (resp.content?.[0]?.text) {
-      res.json({ reply: resp.content[0].text });
+    if (resp.choices?.[0]?.message?.content) {
+      res.json({ reply: resp.choices[0].message.content });
     } else {
       res.json({ error: resp.error?.message || 'Нет ответа от AI' });
     }

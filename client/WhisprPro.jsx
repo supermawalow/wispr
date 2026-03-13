@@ -433,9 +433,12 @@ export default function WhisprPro() {
   const videoPreviewRef = useRef(null);
   const [playingVideo, setPlayingVideo] = useState(null);
   const [sendingFile, setSendingFile] = useState(false);
+  const [sendProgress, setSendProgress] = useState(0); // 0-100
   const fileInputRef = useRef(null);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [linkPreviews, setLinkPreviews] = useState({}); // {msgId: {title,desc,image,url}} // {data, name, type}
+  const [imagePreview, setImagePreview] = useState(null); // {data, name, type, sizeStr}
+  const [filePreview, setFilePreview] = useState(null);  // {data, name, mimeType, sizeStr}
+  const [lightbox, setLightbox] = useState(null);        // {src, alt} — fullscreen photo viewer
+  const [linkPreviews, setLinkPreviews] = useState({}); // {msgId: {title,desc,image,url}}
   // Кнопка звонка всегда видна
   const [callType, setCallType] = useState('audio'); // audio | video
   // Горячая клавиша Esc
@@ -1009,18 +1012,45 @@ export default function WhisprPro() {
     }
   };
 
+  const formatFileSize = (bytes) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+    return (bytes/1024/1024).toFixed(1) + ' MB';
+  };
+
+  const getFileIcon = (mimeType, name) => {
+    if (!mimeType && name) {
+      const ext = name.split('.').pop()?.toLowerCase();
+      if (ext === 'pdf') return { icon: 'PDF', color: '#ef4444' };
+      if (['doc','docx'].includes(ext)) return { icon: 'DOC', color: '#3b82f6' };
+      if (['xls','xlsx'].includes(ext)) return { icon: 'XLS', color: '#22c55e' };
+      if (['zip','rar','7z'].includes(ext)) return { icon: 'ZIP', color: '#a855f7' };
+      if (['mp3','ogg','wav','flac'].includes(ext)) return { icon: 'MP3', color: '#f59e0b' };
+      return { icon: 'FILE', color: 'rgba(255,255,255,0.4)' };
+    }
+    if (mimeType?.includes('pdf')) return { icon: 'PDF', color: '#ef4444' };
+    if (mimeType?.includes('word') || mimeType?.includes('document')) return { icon: 'DOC', color: '#3b82f6' };
+    if (mimeType?.includes('sheet') || mimeType?.includes('excel')) return { icon: 'XLS', color: '#22c55e' };
+    if (mimeType?.includes('zip') || mimeType?.includes('rar') || mimeType?.includes('archive') || mimeType?.includes('x-7z')) return { icon: 'ZIP', color: '#a855f7' };
+    if (mimeType?.includes('audio')) return { icon: 'MP3', color: '#f59e0b' };
+    if (mimeType?.includes('text')) return { icon: 'TXT', color: 'rgba(255,255,255,0.5)' };
+    return { icon: 'FILE', color: 'rgba(255,255,255,0.4)' };
+  };
+
   const handleFileSelect = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const maxMB = file.type.startsWith('video/') ? 40 : file.type.startsWith('image/') ? 10 : 15;
     if (file.size > maxMB * 1024 * 1024) { alert(`Файл слишком большой (макс ${maxMB}МБ)`); return; }
+    const sizeStr = formatFileSize(file.size);
     const r = new FileReader();
     r.onloadend = () => {
       if (file.type.startsWith('image/')) {
-        setImagePreview({data: r.result, name: file.name, type: 'image'});
+        setImagePreview({data: r.result, name: file.name, type: 'image', sizeStr});
+        setFilePreview(null);
       } else {
-        // Отправляем сразу не-изображения
-        sendFile(r.result, file.name, file.type);
+        setFilePreview({data: r.result, name: file.name, mimeType: file.type, sizeStr});
+        setImagePreview(null);
       }
     };
     r.readAsDataURL(file);
@@ -1050,15 +1080,25 @@ export default function WhisprPro() {
     const chat = activeChatRef.current;
     if (!chat || !socket) return;
     setSendingFile(true);
-    const isImage = mimeType.startsWith('image/');
-    const isVideo = mimeType.startsWith('video/');
+    setSendProgress(0);
+    // Simulate progress bar for UX
+    let p = 0;
+    const prog = setInterval(() => { p = Math.min(p + Math.random()*25, 85); setSendProgress(Math.round(p)); }, 120);
+    const isImage = mimeType?.startsWith('image/');
+    const isVideo = mimeType?.startsWith('video/');
     const msgType = isImage ? 'image' : isVideo ? 'video_file' : 'file';
     const payload = {text: name, type: msgType, audioData: data, fileName: name, fileMime: mimeType};
-    const cb = (res) => { setSendingFile(false); if (!res?.success) alert('Ошибка отправки файла'); };
+    const cb = (res) => {
+      clearInterval(prog);
+      setSendProgress(100);
+      setTimeout(() => { setSendingFile(false); setSendProgress(0); }, 400);
+      if (!res?.success) alert('Ошибка отправки файла');
+    };
     if (chat.type==='direct') socket.emit('send_message', {to:chat.id, ...payload}, cb);
     else if (chat.type==='group') socket.emit('send_group_message', {groupId:chat.id, ...payload}, cb);
     else if (chat.type==='channel') socket.emit('send_channel_message', {channelId:chat.id, ...payload}, cb);
     setImagePreview(null);
+    setFilePreview(null);
   };
 
   const handlePinMessage = (msg) => {
@@ -1442,23 +1482,33 @@ export default function WhisprPro() {
                             </div>
                           ):msg.type==='image'?(
                             <div className="relative max-w-xs">
-                              <img src={msg.audioData} alt={msg.text||'фото'} className="rounded-2xl max-w-full cursor-pointer hover:opacity-90 transition-opacity"
+                              <img src={msg.audioData} alt={msg.text||'фото'} className="rounded-2xl max-w-full cursor-zoom-in hover:opacity-90 transition-opacity"
                                 style={{maxHeight:'300px',objectFit:'cover'}}
-                                onClick={()=>window.open(msg.audioData,'_blank')}/>
+                                onClick={()=>setLightbox({src:msg.audioData, alt:msg.text||'фото'})}/>
                             </div>
                           ):msg.type==='video_file'?(
                             <div className="max-w-xs">
                               <video src={msg.audioData} controls className="rounded-2xl max-w-full" style={{maxHeight:'300px'}} playsInline/>
                             </div>
                           ):msg.type==='file'?(
-                            <div className="flex items-center gap-3 px-4 py-3 rounded-2xl min-w-48" style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.07)'}}>
-                              <FileText className="w-8 h-8 flex-shrink-0 text-white/50"/>
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm text-white/80 truncate font-medium">{msg.text||'Файл'}</div>
-                                <div className="text-xs text-white/30">Документ</div>
-                              </div>
-                              <a href={msg.audioData} download={msg.text||'file'} className="p-2 rounded-xl hover:bg-white/10 transition-colors flex-shrink-0"><Download className="w-4 h-4 text-white/50"/></a>
-                            </div>
+                            (() => {
+                              const fi = getFileIcon(msg.fileMime, msg.text);
+                              const isPdf = msg.fileMime?.includes('pdf') || msg.text?.toLowerCase().endsWith('.pdf');
+                              return (
+                                <div className="flex items-center gap-3 px-4 py-3 rounded-2xl min-w-56" style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.07)'}}>
+                                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-xs font-bold" style={{background:fi.color+'22',border:`1px solid ${fi.color}44`,color:fi.color}}>{fi.icon}</div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm text-white/80 truncate font-medium">{msg.text||'Файл'}</div>
+                                    <div className="text-xs text-white/30">{isPdf?'PDF документ':fi.icon==='DOC'?'Word документ':fi.icon==='XLS'?'Таблица Excel':fi.icon==='ZIP'?'Архив':fi.icon==='MP3'?'Аудио':'Документ'}</div>
+                                  </div>
+                                  {isPdf ? (
+                                    <a href={msg.audioData} target="_blank" rel="noopener noreferrer" className="p-2 rounded-xl hover:bg-white/10 transition-colors flex-shrink-0" title="Открыть PDF"><FileText className="w-4 h-4" style={{color:fi.color}}/></a>
+                                  ) : (
+                                    <a href={msg.audioData} download={msg.text||'file'} className="p-2 rounded-xl hover:bg-white/10 transition-colors flex-shrink-0" title="Скачать"><Download className="w-4 h-4 text-white/50"/></a>
+                                  )}
+                                </div>
+                              );
+                            })()
                           ):msg.type==='voice'?(
                             <div className="flex items-center gap-3 min-w-36">
                               <button onClick={()=>toggleAudio(mid,msg.audioData)} className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all hover:scale-105" style={{background:'rgba(255,255,255,0.15)'}}>
@@ -1524,14 +1574,49 @@ export default function WhisprPro() {
                   <img src={imagePreview.data} alt="" className="w-12 h-12 rounded-lg object-cover flex-shrink-0"/>
                   <div className="flex-1 min-w-0">
                     <div className="text-xs text-white/60 truncate">{imagePreview.name}</div>
-                    <div className="text-xs text-white/25">Изображение</div>
+                    <div className="text-xs text-white/25">Изображение · {imagePreview.sizeStr}</div>
                   </div>
-                  <button onClick={()=>sendFile(imagePreview.data, imagePreview.name, 'image/jpeg')} disabled={sendingFile}
-                    className="px-3 py-1.5 rounded-lg text-xs text-white font-medium flex-shrink-0 hover:opacity-90 disabled:opacity-50"
-                    style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
-                    {sendingFile?'...':'Отправить'}
-                  </button>
+                  {sendingFile?(
+                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                      <div className="text-xs text-white/40">{sendProgress}%</div>
+                      <div className="w-20 h-1 rounded-full overflow-hidden" style={{background:'rgba(255,255,255,0.1)'}}>
+                        <div className="h-full rounded-full transition-all duration-200" style={{width:`${sendProgress}%`,background:`linear-gradient(90deg,${T.a},${T.b})`}}/>
+                      </div>
+                    </div>
+                  ):(
+                    <button onClick={()=>sendFile(imagePreview.data, imagePreview.name, 'image/jpeg')} disabled={sendingFile}
+                      className="px-3 py-1.5 rounded-lg text-xs text-white font-medium flex-shrink-0 hover:opacity-90 disabled:opacity-50"
+                      style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
+                      Отправить
+                    </button>
+                  )}
                   <button onClick={()=>setImagePreview(null)} className="p-1 rounded-lg hover:bg-white/5 flex-shrink-0"><X className="w-3.5 h-3.5 text-white/25"/></button>
+                </div>
+              )}
+              {filePreview&&(
+                <div className="flex items-center gap-3 mb-2 px-3 py-2 rounded-xl" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)'}}>
+                  {(()=>{const fi=getFileIcon(filePreview.mimeType,filePreview.name);return(
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-xs font-bold" style={{background:fi.color+'22',border:`1px solid ${fi.color}44`,color:fi.color}}>{fi.icon}</div>
+                  );})()}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-white/60 truncate">{filePreview.name}</div>
+                    <div className="text-xs text-white/25">Файл · {filePreview.sizeStr}</div>
+                  </div>
+                  {sendingFile?(
+                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                      <div className="text-xs text-white/40">{sendProgress}%</div>
+                      <div className="w-20 h-1 rounded-full overflow-hidden" style={{background:'rgba(255,255,255,0.1)'}}>
+                        <div className="h-full rounded-full transition-all duration-200" style={{width:`${sendProgress}%`,background:`linear-gradient(90deg,${T.a},${T.b})`}}/>
+                      </div>
+                    </div>
+                  ):(
+                    <button onClick={()=>sendFile(filePreview.data, filePreview.name, filePreview.mimeType)} disabled={sendingFile}
+                      className="px-3 py-1.5 rounded-lg text-xs text-white font-medium flex-shrink-0 hover:opacity-90 disabled:opacity-50"
+                      style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
+                      Отправить
+                    </button>
+                  )}
+                  <button onClick={()=>setFilePreview(null)} className="p-1 rounded-lg hover:bg-white/5 flex-shrink-0"><X className="w-3.5 h-3.5 text-white/25"/></button>
                 </div>
               )}
               {replyTo&&(
@@ -2101,6 +2186,31 @@ export default function WhisprPro() {
       {/* ══ CALLS ══ */}
       {callState==='incoming'&&<IncomingCallOverlay from={callPeer} fromDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} fromAvatar={avatars[callPeer]} onAccept={acceptCall} onReject={rejectCall}/>}
       {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} localStream={localStreamRef.current} remoteStream={remoteStreamRef.current} callType={callType}/>}
+
+      {/* ── LIGHTBOX — полноэкранный просмотр фото ── */}
+      {lightbox&&(
+        <div
+          className="fixed inset-0 flex items-center justify-center z-50"
+          style={{background:'rgba(0,0,0,0.92)',backdropFilter:'blur(12px)',animation:'fadeIn 0.15s ease'}}
+          onClick={()=>setLightbox(null)}
+        >
+          <button
+            className="absolute top-4 right-4 w-10 h-10 rounded-full flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 transition-all z-10"
+            onClick={()=>setLightbox(null)}
+          ><X className="w-5 h-5"/></button>
+          <a
+            href={lightbox.src} download={lightbox.alt}
+            className="absolute top-4 right-16 w-10 h-10 rounded-full flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 transition-all z-10"
+            onClick={e=>e.stopPropagation()} title="Скачать"
+          ><Download className="w-5 h-5"/></a>
+          <img
+            src={lightbox.src} alt={lightbox.alt}
+            className="max-w-[90vw] max-h-[90vh] rounded-2xl object-contain"
+            style={{boxShadow:'0 32px 80px rgba(0,0,0,0.6)',animation:'popIn 0.2s ease'}}
+            onClick={e=>e.stopPropagation()}
+          />
+        </div>
+      )}
 
       <div style={{position:'fixed',bottom:8,left:'50%',transform:'translateX(-50%)',color:'rgba(255,255,255,0.07)',fontSize:'10px',pointerEvents:'none',letterSpacing:'0.15em',zIndex:100}}>by Meowlentii</div>
       <style>{CSS}</style>
