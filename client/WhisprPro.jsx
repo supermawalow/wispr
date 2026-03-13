@@ -332,7 +332,6 @@ export default function WhisprPro() {
   const [editingChannel, setEditingChannel] = useState(null);
   const [channelSettingsForm, setChannelSettingsForm] = useState({});
   const [channelSearch, setChannelSearch] = useState('');
-  const [searchChannelResults, setSearchChannelResults] = useState([]);
   const [channelSearchResults, setChannelSearchResults] = useState([]);
   // История звонков
   const [callHistory, setCallHistory] = useState([]);
