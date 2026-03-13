@@ -189,25 +189,39 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
   const remoteVidRef = useRef(null);
   const audioRef     = useRef(null);
 
-  // Подключить локальный поток (своя камера) — только muted
+  // Подключить локальный поток (своя камера) — muted, чтобы не было эха
   useEffect(() => {
     if (localVidRef.current && localStream && isVideo) {
       localVidRef.current.srcObject = localStream;
-      localVidRef.current.play().catch(()=>{ /* autoplay */ });
+      localVidRef.current.play().catch(()=>{});
     }
   }, [localStream, isVideo]);
 
-  // Подключить удалённый поток (собеседник) — видео + аудио
+  // Подключить удалённый поток.
+  // remoteStream — это ref.current (мутируемый объект), React не видит изменения через props.
+  // Используем polling каждые 300ms пока поток не появится.
   useEffect(() => {
-    if (!remoteStream) return;
-    if (audioRef.current) {
-      audioRef.current.srcObject = remoteStream;
-      audioRef.current.play().catch(()=>{ /* autoplay */ });
-    }
-    if (remoteVidRef.current && isVideo) {
-      remoteVidRef.current.srcObject = remoteStream;
-      remoteVidRef.current.play().catch(()=>{ /* autoplay */ });
-    }
+    const attach = (stream) => {
+      if (!stream) return false;
+      if (audioRef.current && audioRef.current.srcObject !== stream) {
+        audioRef.current.srcObject = stream;
+        audioRef.current.play().catch(()=>{});
+      }
+      if (remoteVidRef.current && isVideo && remoteVidRef.current.srcObject !== stream) {
+        remoteVidRef.current.srcObject = stream;
+        remoteVidRef.current.play().catch(()=>{});
+      }
+      return true;
+    };
+
+    // Сразу попробуем
+    if (attach(remoteStream)) return;
+
+    // Если поток ещё не пришёл — опрашиваем каждые 300ms
+    const timer = setInterval(() => {
+      if (attach(remoteStream)) clearInterval(timer);
+    }, 300);
+    return () => clearInterval(timer);
   }, [remoteStream, isVideo]);
 
   if (isVideo) {
@@ -780,9 +794,9 @@ export default function WhisprPro() {
     const msg = (text||'').trim();
     if (!msg || !activeChat) return;
     const replyData = replyTo ? {replyToId:replyTo._id, replyFrom:replyTo.from, replyText:replyTo.type==='voice'?'🎤 Голосовое':replyTo.type==='video'?'📹 Видео':replyTo.text} : {};
-    if (activeChat.type==='direct') socket.emit('send_message', {to:activeChat.id, text:msg, type:'text', ...replyData}, ()=>{});
-    else if (activeChat.type==='group') socket.emit('send_group_message', {groupId:activeChat.id, text:msg, type:'text', ...replyData}, ()=>{});
-    else if (activeChat.type==='channel') socket.emit('send_channel_message', {channelId:activeChat.id, text:msg, type:'text'}, ()=>{});
+    if (activeChat.type==='direct') socket.emit('send_message', {to:activeChat.id, text:msg, type:'text', ...replyData}, res=>{ if(res&&!res.success) console.error('send_message error:', res.error); });
+    else if (activeChat.type==='group') socket.emit('send_group_message', {groupId:activeChat.id, text:msg, type:'text', ...replyData}, res=>{ if(res&&!res.success) console.error('send_group_message error:', res.error); });
+    else if (activeChat.type==='channel') socket.emit('send_channel_message', {channelId:activeChat.id, text:msg, type:'text'}, res=>{ if(res&&!res.success) console.error('send_channel_message error:', res.error); });
     setText(''); setReplyTo(null);
     const key = getChatKey(activeChatRef.current);
     if (key) { draftsRef.current[key]=''; setDrafts(p=>({...p,[key]:''})); }
@@ -1895,7 +1909,7 @@ export default function WhisprPro() {
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>✦</div>
                 <div>
                   <p className="text-white/90 font-semibold text-sm">Whispr AI</p>
-                  <p className="text-white/25 text-xs">Claude Haiku · бесплатно</p>
+                  <p className="text-white/25 text-xs">Llama 3.3 · бесплатно</p>
                 </div>
               </div>
               <div className="flex gap-2 items-center">

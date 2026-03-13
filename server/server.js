@@ -283,7 +283,13 @@ io.on('connection', (socket) => {
       const { to, text, type, audioData, replyToId, replyFrom, replyText } = data;
       // Проверить блокировку
       const meUser = await User.findOne({ username: me });
-      if (meUser?.blockedUsers?.includes(to.toLowerCase())) return cb({ success: false, error: 'Вы заблокировали этого пользователя' });
+      if (!meUser) {
+        // Пользователь есть в сокете но не в БД (например после очистки MongoDB)
+        // Принудительно разлогиниваем чтобы клиент заново зарегистрировался
+        socket.emit('force_disconnect', { reason: 'Сессия устарела — войдите снова' });
+        return cb({ success: false, error: 'Пользователь не найден — войдите снова' });
+      }
+      if (meUser.blockedUsers?.includes(to.toLowerCase())) return cb({ success: false, error: 'Вы заблокировали этого пользователя' });
       const toUser = await User.findOne({ username: to.toLowerCase() });
       if (toUser?.blockedUsers?.includes(me)) return cb({ success: false, error: 'Вы заблокированы этим пользователем' });
       const recipientSocket = userSockets.get(to.toLowerCase());
@@ -298,7 +304,7 @@ io.on('connection', (socket) => {
       socket.emit('new_message', msg);
       if (recipientSocket) io.to(recipientSocket).emit('new_message', msg);
       cb({ success: true, message: msg });
-    } catch (e) { cb({ success: false, error: 'Ошибка отправки' }); }
+    } catch (e) { console.error('send_message error:', e); cb({ success: false, error: 'Ошибка отправки: ' + e.message }); }
   });
 
   // ══════════════════════════════════════════
@@ -362,11 +368,10 @@ io.on('connection', (socket) => {
         if (s) io.to(s).emit('new_group_message', { ...msg.toObject(), groupId });
       }
       cb({ success: true, message: msg });
-    } catch (e) { cb({ success: false, error: 'Ошибка отправки' }); }
+    } catch (e) { console.error('send_group_message error:', e); cb({ success: false, error: 'Ошибка отправки: ' + e.message }); }
   });
 
   // Добавить участника в группу
-  socket.on('group_add_member', async (data, cb) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return cb({ success: false, error: 'Не авторизован' });
     try {
