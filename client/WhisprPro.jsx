@@ -432,6 +432,7 @@ export default function WhisprPro() {
   const [linkPreviews, setLinkPreviews] = useState({}); // {msgId: {title,desc,image,url}}
   // Кнопка звонка всегда видна
   const [callType, setCallType] = useState('audio'); // audio | video
+  const callTypeRef = useRef('audio');
   // Горячая клавиша Esc
   useEffect(() => {
     const onKey = e => {
@@ -490,7 +491,7 @@ export default function WhisprPro() {
       });
       localStreamRef.current = stream;
       setLocalStreamState(stream);
-      setCallType(ct);
+      setCallType(ct); callTypeRef.current = ct;
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
@@ -510,7 +511,7 @@ export default function WhisprPro() {
 
   const acceptCall = useCallback(async () => {
     try {
-      const isVideo = callType === 'video';
+      const isVideo = callTypeRef.current === 'video'; // ref, не stale closure!
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true, sampleRate:48000, channelCount:1 },
         video: isVideo ? { facingMode:'user', width:{ideal:640}, height:{ideal:480} } : false
@@ -633,7 +634,7 @@ export default function WhisprPro() {
       callPeerRef.current = from;
       incomingOfferRef.current = offer;
       setCallPeer(from);
-      setCallType(ct);      // ← сохраняем тип ДО acceptCall
+      setCallType(ct); callTypeRef.current = ct;      // ← сохраняем тип ДО acceptCall
       setCallState('incoming');
     });
     s.on('message_pinned', ({groupId, messageId, pinnedBy}) => {
