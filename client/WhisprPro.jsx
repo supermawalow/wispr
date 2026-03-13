@@ -1924,9 +1924,7 @@ export default function WhisprPro() {
                     style={m.role==='user'
                       ?{background:`linear-gradient(135deg,${T.a},${T.b})`,color:'#fff',boxShadow:`0 2px 12px ${T.a}40`}
                       :{background:'rgba(255,255,255,0.06)',color:'rgba(255,255,255,0.85)',border:'1px solid rgba(255,255,255,0.07)'}}>
-                    {m.content.split('
-').map((line,j)=><span key={j}>{line}{j<m.content.split('
-').length-1&&<br/>}</span>)}
+                    {m.content.split('\n').map((line,j,arr)=><span key={j}>{line}{j<arr.length-1&&<br/>}</span>)}
                   </div>
                 </div>
               ))}
