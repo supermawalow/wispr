@@ -182,47 +182,9 @@ function IncomingCallOverlay({ from, fromDisplay, fromAvatar, onAccept, onReject
   );
 }
 
-function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, calling, localStream, remoteStream, callType }) {
+function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, calling, localVidRef, remoteVidRef, remoteAudioRef, callType }) {
   const fmt = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
   const isVideo = callType === 'video';
-  const localVidRef  = useRef(null);
-  const remoteVidRef = useRef(null);
-  const audioRef     = useRef(null);
-
-  // Подключить локальный поток (своя камера) — muted, чтобы не было эха
-  useEffect(() => {
-    if (localVidRef.current && localStream && isVideo) {
-      localVidRef.current.srcObject = localStream;
-      localVidRef.current.play().catch(()=>{});
-    }
-  }, [localStream, isVideo]);
-
-  // Подключить удалённый поток.
-  // remoteStream — это ref.current (мутируемый объект), React не видит изменения через props.
-  // Используем polling каждые 300ms пока поток не появится.
-  useEffect(() => {
-    const attach = (stream) => {
-      if (!stream) return false;
-      if (audioRef.current && audioRef.current.srcObject !== stream) {
-        audioRef.current.srcObject = stream;
-        audioRef.current.play().catch(()=>{});
-      }
-      if (remoteVidRef.current && isVideo && remoteVidRef.current.srcObject !== stream) {
-        remoteVidRef.current.srcObject = stream;
-        remoteVidRef.current.play().catch(()=>{});
-      }
-      return true;
-    };
-
-    // Сразу попробуем
-    if (attach(remoteStream)) return;
-
-    // Если поток ещё не пришёл — опрашиваем каждые 300ms
-    const timer = setInterval(() => {
-      if (attach(remoteStream)) clearInterval(timer);
-    }, 300);
-    return () => clearInterval(timer);
-  }, [remoteStream, isVideo]);
 
   if (isVideo) {
     return (
@@ -269,7 +231,7 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
             </div>
           </div>
         </div>
-        <audio ref={audioRef} autoPlay playsInline/>
+        <audio ref={remoteAudioRef} autoPlay playsInline/>
       </div>
     );
   }
@@ -302,7 +264,7 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
           </button>
         </div>
       </div>
-      <audio ref={audioRef} autoPlay playsInline/>
+      <audio ref={remoteAudioRef} autoPlay playsInline/>
     </div>
   );
 }
@@ -364,6 +326,7 @@ export default function WhisprPro() {
   const [callPeer, setCallPeer] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
   const [callMuted, setCallMuted] = useState(false);
+  const [remoteStreamState, setRemoteStreamState] = useState(null); // для ре-рендера overlay
   const peerConnectionRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
@@ -497,6 +460,7 @@ export default function WhisprPro() {
     if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t=>t.stop()); localStreamRef.current=null; }
     clearInterval(callTimerRef.current);
     remoteStreamRef.current=null;
+    setRemoteStreamState(null);
     pendingIceCandidatesRef.current=[];
     const a=remoteAudioRef.current; if(a) a.srcObject=null;
     setCallState('idle'); setCallPeer(null); setCallDuration(0); setCallMuted(false);
@@ -518,11 +482,9 @@ export default function WhisprPro() {
       pc.ontrack = e => {
         const s = e.streams?.[0] || new MediaStream([e.track]);
         remoteStreamRef.current = s;
-        // Аудио
+        setRemoteStreamState(s); // триггерим ре-рендер чтобы overlay получил стрим
         const tryAudio = () => { const a=remoteAudioRef.current||document.getElementById('remoteAudio'); if(a){a.srcObject=s;a.play().catch(()=>{});} };
         tryAudio(); setTimeout(tryAudio, 500);
-        // Видео
-        if (remoteVideoRef.current) { remoteVideoRef.current.srcObject=s; remoteVideoRef.current.play().catch(()=>{}); }
       };
       pc.onicecandidate = e => { if(e.candidate) socketRef.current?.emit('ice_candidate',{to:toUsername,candidate:e.candidate}); };
       pc.onconnectionstatechange = () => { if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); };
@@ -547,9 +509,9 @@ export default function WhisprPro() {
       pc.ontrack = e => {
         const s = e.streams?.[0] || new MediaStream([e.track]);
         remoteStreamRef.current = s;
+        setRemoteStreamState(s); // триггерим ре-рендер чтобы overlay получил стрим
         const tryAudio = () => { const a=remoteAudioRef.current||document.getElementById('remoteAudio'); if(a){a.srcObject=s;a.play().catch(()=>{});} };
         tryAudio(); setTimeout(tryAudio, 500);
-        if (remoteVideoRef.current) { remoteVideoRef.current.srcObject=s; remoteVideoRef.current.play().catch(()=>{}); }
       };
       pc.onicecandidate = e => { if(e.candidate) socketRef.current?.emit('ice_candidate',{to:callPeerRef.current,candidate:e.candidate}); };
       pc.onconnectionstatechange = () => { if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); };
@@ -2197,7 +2159,7 @@ export default function WhisprPro() {
 
       {/* ══ CALLS ══ */}
       {callState==='incoming'&&<IncomingCallOverlay from={callPeer} fromDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} fromAvatar={avatars[callPeer]} onAccept={acceptCall} onReject={rejectCall}/>}
-      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} localStream={localStreamRef.current} remoteStream={remoteStreamRef.current} callType={callType}/>}
+      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} localStream={localStreamRef.current} remoteStream={remoteStreamState} callType={callType}/>}
 
       {/* ── LIGHTBOX — полноэкранный просмотр фото ── */}
       {lightbox&&(
