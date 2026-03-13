@@ -1715,7 +1715,7 @@ export default function WhisprPro() {
                   <input ref={fileInputRef} type="file" accept="image/*,video/*,.pdf,.doc,.docx,.txt,.zip" className="hidden" onChange={handleFileSelect}/>
                   <button type="button" onClick={()=>fileInputRef.current?.click()} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Прикрепить файл"><Paperclip className="w-5 h-5 text-white/25"/></button>
                   <div className="relative flex-shrink-0">
-                    <button type="button" onClick={()=>setShowStickerPanel(p=>!p)} className="p-3 rounded-2xl hover:bg-white/5 transition-colors" style={{border:'1px solid rgba(255,255,255,0.06)',background:showStickerPanel?'rgba(255,255,255,0.07)':'transparent'}} title="Стикеры и GIF">
+                    <button type="button" onClick={e=>{e.stopPropagation();setShowStickerPanel(p=>!p);}} className="p-3 rounded-2xl hover:bg-white/5 transition-colors" style={{border:'1px solid rgba(255,255,255,0.06)',background:showStickerPanel?'rgba(255,255,255,0.07)':'transparent'}} title="Стикеры и GIF">
                       <Smile className="w-5 h-5 text-white/25"/>
                     </button>
                     {showStickerPanel&&(
