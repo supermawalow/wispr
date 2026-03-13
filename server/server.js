@@ -291,7 +291,6 @@ io.on('connection', (socket) => {
         chatId: getChatId(me, to.toLowerCase()), chatType: 'direct',
         from: me, to: to.toLowerCase(),
         text: text || '', type: type || 'text', audioData: audioData || null,
-        replyToId: replyToId || null, replyFrom: replyFrom || null, replyText: replyText || null,
         delivered: !!recipientSocket, read: false,
         replyToId: replyToId || null, replyFrom: replyFrom || null, replyText: replyText || null,
         fileName: data.fileName || null, fileMime: data.fileMime || null
@@ -1126,6 +1125,52 @@ app.get('/api/link-preview', async (req, res) => {
     if (!title) return res.json({ error: 'no title' });
     res.json({ url, title, desc: desc||'', image: image||null });
   } catch(e) { res.json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════
+//  AI CHAT ENDPOINT (Anthropic Claude)
+//  Set ANTHROPIC_API_KEY in Render env vars
+// ══════════════════════════════════════════
+app.post('/api/ai-chat', async (req, res) => {
+  const { messages } = req.body;
+  if (!messages || !Array.isArray(messages)) return res.json({ error: 'invalid messages' });
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.json({ error: 'AI не настроен. Добавьте ANTHROPIC_API_KEY в переменные окружения Render.' });
+  try {
+    const body = JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system: 'Ты Whispr AI — умный помощник внутри мессенджера Whispr. Отвечай кратко, дружелюбно, на русском языке если пользователь пишет на русском.',
+      messages: messages.slice(-20) // последние 20 сообщений для контекста
+    });
+    const resp = await new Promise((resolve, reject) => {
+      const req2 = https_mod.request({
+        hostname: 'api.anthropic.com',
+        path: '/v1/messages',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Length': Buffer.byteLength(body)
+        }
+      }, r => {
+        let data = '';
+        r.on('data', d => data += d);
+        r.on('end', () => {
+          try { resolve(JSON.parse(data)); } catch(e) { reject(e); }
+        });
+      });
+      req2.on('error', reject);
+      req2.write(body);
+      req2.end();
+    });
+    if (resp.content?.[0]?.text) {
+      res.json({ reply: resp.content[0].text });
+    } else {
+      res.json({ error: resp.error?.message || 'Нет ответа от AI' });
+    }
+  } catch(e) { res.json({ error: 'Ошибка AI: ' + e.message }); }
 });
 
 server.listen(PORT, () => console.log(`🚀 Whispr Server v3 on port ${PORT}`));

@@ -182,72 +182,113 @@ function IncomingCallOverlay({ from, fromDisplay, fromAvatar, onAccept, onReject
   );
 }
 
-function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, calling, audioRef, remoteStream, callType, localVideoRef, remoteVideoRef }) {
-  const fmt = s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
-  const audioElRef = useRef(null);
-  const remoteVidEl = useRef(null);
+function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, calling, localStream, remoteStream, callType }) {
+  const fmt = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
   const isVideo = callType === 'video';
+  const localVidRef  = useRef(null);
+  const remoteVidRef = useRef(null);
+  const audioRef     = useRef(null);
 
-  // Подключить аудио поток
+  // Подключить локальный поток (своя камера) — только muted
   useEffect(() => {
-    const el = audioRef?.current || audioElRef.current;
-    if (el && remoteStream) { el.srcObject = remoteStream; el.play().catch(()=>{}); }
-  }, [remoteStream]);
+    if (localVidRef.current && localStream && isVideo) {
+      localVidRef.current.srcObject = localStream;
+      localVidRef.current.play().catch(()=>{ /* autoplay */ });
+    }
+  }, [localStream, isVideo]);
 
-  // Подключить видео поток к remote video элементу
+  // Подключить удалённый поток (собеседник) — видео + аудио
   useEffect(() => {
-    const el = remoteVideoRef?.current || remoteVidEl.current;
-    if (el && remoteStream && isVideo) {
-      el.srcObject = remoteStream;
-      el.play().catch(()=>{});
+    if (!remoteStream) return;
+    if (audioRef.current) {
+      audioRef.current.srcObject = remoteStream;
+      audioRef.current.play().catch(()=>{ /* autoplay */ });
+    }
+    if (remoteVidRef.current && isVideo) {
+      remoteVidRef.current.srcObject = remoteStream;
+      remoteVidRef.current.play().catch(()=>{ /* autoplay */ });
     }
   }, [remoteStream, isVideo]);
 
   if (isVideo) {
     return (
-      <div className="fixed inset-0 z-[200] flex items-end justify-center pb-10"
-        style={{background:'#000',animation:'fadeIn 0.2s ease'}}>
-        {/* Remote video — fullscreen background */}
-        <video ref={remoteVidEl} autoPlay playsInline
+      <div className="fixed inset-0 z-[200]" style={{background:'#000',animation:'fadeIn 0.2s ease'}}>
+        {/* Remote — fullscreen */}
+        <video ref={remoteVidRef} autoPlay playsInline muted={false}
           className="absolute inset-0 w-full h-full object-cover"
-          style={{background:'#111'}}/>
-        {/* Local video — PiP top-right */}
-        <video ref={localVideoRef} autoPlay muted playsInline
-          className="absolute top-4 right-4 rounded-2xl object-cover"
-          style={{width:110,height:150,border:'2px solid rgba(255,255,255,0.3)',boxShadow:'0 4px 24px rgba(0,0,0,0.7)',background:'#222',zIndex:10}}/>
-        {/* Controls bar */}
-        <div className="relative z-10 flex flex-col items-center gap-4"
-          style={{background:'rgba(0,0,0,0.55)',backdropFilter:'blur(16px)',borderRadius:24,padding:'16px 32px',border:'1px solid rgba(255,255,255,0.1)'}}>
-          <div className="flex items-center gap-3">
-            <Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="sm"/>
-            <div>
-              <p className="text-white font-semibold text-sm">{peerDisplay||peer}</p>
-              <p className={`text-xs font-mono ${calling?'text-white/40 animate-pulse':'text-green-400'}`}>{calling?'Подключение...':fmt(duration)}</p>
+          style={{background:'#0a0a0a'}}/>
+        {/* Local — PiP top-right */}
+        <video ref={localVidRef} autoPlay playsInline muted
+          className="absolute rounded-2xl object-cover"
+          style={{top:16,right:16,width:120,height:160,zIndex:10,
+            border:'2px solid rgba(255,255,255,0.25)',
+            boxShadow:'0 4px 24px rgba(0,0,0,0.8)',
+            background:'#1a1a1a'}}/>
+        {/* Controls */}
+        <div className="absolute bottom-10 left-0 right-0 flex justify-center" style={{zIndex:20}}>
+          <div className="flex flex-col items-center gap-3 px-8 py-5 rounded-3xl"
+            style={{background:'rgba(0,0,0,0.65)',backdropFilter:'blur(20px)',border:'1px solid rgba(255,255,255,0.1)'}}>
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0">
+                <Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="sm"/>
+              </div>
+              <div className="text-left">
+                <p className="text-white font-semibold text-sm leading-tight">{peerDisplay||peer}</p>
+                <p className={`text-xs font-mono ${calling?'text-white/40 animate-pulse':'text-green-400'}`}>
+                  {calling?'Подключение...':fmt(duration)}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-4">
+              {!calling&&(
+                <button onClick={onMute}
+                  className={`w-13 h-13 w-12 h-12 rounded-full flex items-center justify-center transition-all active:scale-90 ${muted?'border border-yellow-500/50':'border border-white/15'}`}
+                  style={{background:muted?'rgba(234,179,8,0.2)':'rgba(255,255,255,0.1)'}}>
+                  {muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/60"/>}
+                </button>
+              )}
+              <button onClick={onEnd}
+                className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-90"
+                style={{background:'#ef4444',border:'1px solid rgba(239,68,68,0.5)',boxShadow:'0 0 20px rgba(239,68,68,0.4)'}}>
+                <PhoneOff className="w-6 h-6 text-white"/>
+              </button>
             </div>
           </div>
-          <div className="flex gap-4">
-            {!calling&&<button onClick={onMute} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105 ${muted?'bg-yellow-500/20 border border-yellow-500/40':'bg-white/10 border border-white/15'}`}>{muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/60"/>}</button>}
-            <button onClick={onEnd} className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95" style={{background:'rgba(239,68,68,0.85)',border:'1px solid rgba(239,68,68,0.5)'}}><PhoneOff className="w-6 h-6 text-white"/></button>
-          </div>
         </div>
-        <audio ref={audioElRef} id="remoteAudio" autoPlay playsInline />
+        <audio ref={audioRef} autoPlay playsInline/>
       </div>
     );
   }
 
+  // Аудио-звонок
   return (
     <div className="fixed inset-0 flex items-center justify-center z-[200]"
       style={{background:'rgba(0,0,0,0.88)',backdropFilter:'blur(24px)',animation:'fadeIn 0.2s ease'}}>
-      <div className="rounded-3xl p-10 text-center w-80 shadow-2xl" style={{background:'#111116',border:'1px solid rgba(255,255,255,0.08)',animation:'slideUp 0.25s cubic-bezier(0.34,1.4,0.64,1)'}}>
-        <div className="mb-5 flex justify-center"><Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="lg"/></div>
+      <div className="rounded-3xl p-10 text-center w-80 shadow-2xl"
+        style={{background:'#111116',border:'1px solid rgba(255,255,255,0.08)',animation:'slideUp 0.25s cubic-bezier(0.34,1.4,0.64,1)'}}>
+        <div className="mb-5 flex justify-center">
+          <Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="lg"/>
+        </div>
         <p className="text-white text-xl font-bold mb-1">{peerDisplay||peer}</p>
-        <p className={`text-sm mb-8 font-mono tracking-widest ${calling?'text-white/30 animate-pulse':'text-green-400'}`}>{calling?'Вызов...':fmt(duration)}</p>
+        <p className={`text-sm mb-8 font-mono tracking-widest ${calling?'text-white/30 animate-pulse':'text-green-400'}`}>
+          {calling?'Вызов...':fmt(duration)}
+        </p>
         <div className="flex justify-center gap-4">
-          {!calling&&<button onClick={onMute} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105 ${muted?'bg-yellow-500/20 border border-yellow-500/40':'bg-white/8 border border-white/10'}`}>{muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/50"/>}</button>}
-          <button onClick={onEnd} className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95" style={{background:'rgba(239,68,68,0.2)',border:'1px solid rgba(239,68,68,0.4)'}}><PhoneOff className="w-6 h-6 text-red-400"/></button>
+          {!calling&&(
+            <button onClick={onMute}
+              className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105 ${muted?'border border-yellow-500/40':'border border-white/10'}`}
+              style={{background:muted?'rgba(234,179,8,0.15)':'rgba(255,255,255,0.06)'}}>
+              {muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/50"/>}
+            </button>
+          )}
+          <button onClick={onEnd}
+            className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-90"
+            style={{background:'rgba(239,68,68,0.2)',border:'1px solid rgba(239,68,68,0.4)'}}>
+            <PhoneOff className="w-6 h-6 text-red-400"/>
+          </button>
         </div>
       </div>
-      <audio ref={audioElRef} id="remoteAudio" autoPlay playsInline />
+      <audio ref={audioRef} autoPlay playsInline/>
     </div>
   );
 }
@@ -367,6 +408,17 @@ export default function WhisprPro() {
   const [channelSearchResults, setChannelSearchResults] = useState([]);
   // История звонков
   const [callHistory, setCallHistory] = useState([]);
+
+  // ── AI Bot ──
+  const [aiMessages, setAiMessages] = useState([]);
+  const [aiInput, setAiInput] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [showAiChat, setShowAiChat] = useState(false);
+  const aiEndRef = useRef(null);
+
+  // ── Push Notifications ──
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const pushEnabledRef = useRef(false);
   const [showCallHistory, setShowCallHistory] = useState(false);
   // Видео-звонок
   const [videoEnabled, setVideoEnabled] = useState(false);
@@ -442,11 +494,6 @@ export default function WhisprPro() {
         video: isVideo ? { facingMode:'user', width:{ideal:640}, height:{ideal:480} } : false
       });
       localStreamRef.current = stream;
-      // Показать локальное видео сразу
-      if (isVideo && localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-        localVideoRef.current.play().catch(()=>{});
-      }
       setCallType(ct);
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
@@ -477,10 +524,6 @@ export default function WhisprPro() {
         video: isVideo ? { facingMode:'user', width:{ideal:640}, height:{ideal:480} } : false
       });
       localStreamRef.current = stream;
-      if (isVideo && localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-        localVideoRef.current.play().catch(()=>{});
-      }
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
@@ -525,6 +568,12 @@ export default function WhisprPro() {
           if (active?.type === 'direct' && active.id === key) return p;
           return {...p, [key]: (p[key]||0) + 1};
         });
+        // Push notification
+        if (pushEnabledRef.current && !document.hasFocus()) {
+          const sender = msg.from;
+          const body = msg.type==='voice'?'🎤 Голосовое':msg.type==='video'?'📹 Видео':msg.type==='image'?'🖼 Фото':msg.text||'Новое сообщение';
+          try { new Notification(sender, { body, icon:'/favicon.ico', tag:`dm_${sender}` }); } catch(e) { /* push unavailable */ }
+        }
       }
     });
     s.on('new_group_message', msg => {
@@ -537,6 +586,10 @@ export default function WhisprPro() {
           if (active?.type === 'group' && active.id === msg.groupId) return p;
           return {...p, [key]: (p[key]||0) + 1};
         });
+        // Push notification
+        if (pushEnabledRef.current && !document.hasFocus()) {
+          try { new Notification(msg.groupName||'Группа', { body:`${msg.from}: ${msg.type==='voice'?'🎤 Голосовое':msg.text||'Сообщение'}`, icon:'/favicon.ico', tag:`grp_${msg.groupId}` }); } catch(e) { /* push unavailable */ }
+        }
       }
     });
     s.on('message_edited', ({messageId,newText,edited}) => setMessages(p=>{const u={...p};for(const k of Object.keys(u))u[k]=u[k].map(m=>(m._id===messageId||m.id===messageId)?{...m,text:newText,edited}:m);return u;}));
@@ -847,6 +900,63 @@ export default function WhisprPro() {
     });
   };
 
+  // ════════════════════════════════════════
+  //  AI BOT (Whispr AI — uses server proxy)
+  // ════════════════════════════════════════
+  const sendAiMessage = async () => {
+    const msg = aiInput.trim();
+    if (!msg || aiLoading) return;
+    const userMsg = { role: 'user', content: msg };
+    const newHistory = [...aiMessages, userMsg];
+    setAiMessages(newHistory);
+    setAiInput('');
+    setAiLoading(true);
+    setTimeout(() => aiEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    try {
+      const res = await fetch(`${SERVER_URL}/api/ai-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: newHistory })
+      });
+      const data = await res.json();
+      if (data.reply) {
+        setAiMessages(p => [...p, { role: 'assistant', content: data.reply }]);
+      } else {
+        setAiMessages(p => [...p, { role: 'assistant', content: '⚠️ ' + (data.error || 'Ошибка') }]);
+      }
+    } catch (e) {
+      setAiMessages(p => [...p, { role: 'assistant', content: '⚠️ Нет соединения с AI' }]);
+    }
+    setAiLoading(false);
+    setTimeout(() => aiEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+  };
+
+  // ════════════════════════════════════════
+  //  WEB PUSH NOTIFICATIONS (browser native, free)
+  // ════════════════════════════════════════
+  const requestPushPermission = async () => {
+    if (!('Notification' in window)) { alert('Push не поддерживается в этом браузере'); return; }
+    const perm = await Notification.requestPermission();
+    if (perm === 'granted') {
+      setPushEnabled(true); pushEnabledRef.current = true;
+      new Notification('Whispr', { body: '🔔 Уведомления включены!', icon: '/favicon.ico' });
+    } else {
+      setPushEnabled(false); pushEnabledRef.current = false;
+    }
+  };
+
+  const sendPushNotification = (title, body) => {
+    if (!pushEnabledRef.current || document.hasFocus()) return;
+    try { new Notification(title, { body, icon: '/favicon.ico', silent: false }); } catch(e) { /* push unavailable */ }
+  };
+
+  // Инициализация push при загрузке
+  React.useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      setPushEnabled(true); pushEnabledRef.current = true;
+    }
+  }, []);
+
   // Видео-кружочки
   const startVideoRecording = async () => {
     try {
@@ -1066,6 +1176,14 @@ export default function WhisprPro() {
             <div className="flex gap-0.5 flex-shrink-0">
               <button onClick={()=>{setShowSettings(true);setSettingsTab('account');setEditDisplayName(currentUser?.displayName||'');setEditUsername(currentUser?.username||'');setEditBio(currentUser?.bio||'');setProfileError('');setProfileSuccess('');}} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors" title="Настройки"><Settings className="w-4 h-4 text-white/30 hover:text-white/60" /></button>
               {currentUser?.isAdmin&&<button onClick={()=>{setShowAdminPanel(true);loadAdminData();}} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"><Shield className="w-4 h-4 text-white/30 hover:text-white/60" /></button>}
+              <button onClick={()=>setShowAiChat(true)} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors" title="Whispr AI"><MessageSquare className="w-4 h-4 text-white/30 hover:text-white/60"/></button>
+              <button onClick={pushEnabled ? ()=>{setPushEnabled(false);pushEnabledRef.current=false;} : requestPushPermission}
+                className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"
+                title={pushEnabled?'Уведомления вкл':'Включить уведомления'}>
+                {pushEnabled
+                  ? <span className="text-xs">🔔</span>
+                  : <span className="text-xs opacity-30">🔕</span>}
+              </button>
               <button onClick={handleLogout} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"><LogOut className="w-4 h-4 text-white/30 hover:text-white/60" /></button>
             </div>
           </div>
@@ -1140,7 +1258,7 @@ export default function WhisprPro() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className={`text-sm font-medium truncate ${activeChat?.type==='channel'&&activeChat.id===ch._id?'text-white':'text-white/60'}`}>{ch.name}</div>
-                <div className="text-xs text-white/20">'📢 Канал · ' + ch.subscribers.length + ' подп.'</div>
+                <div className="text-xs text-white/20">📢 Канал · {ch.subscribers?.length||0} подп.</div>
               </div>
               {(unreadCounts[`channel_${ch._id}`]||0)>0&&<span className="flex-shrink-0 min-w-[18px] h-[18px] rounded-full text-[10px] font-bold text-white flex items-center justify-center px-1" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{unreadCounts[`channel_${ch._id}`]}</span>}
             </div>
@@ -1165,7 +1283,7 @@ export default function WhisprPro() {
                       ? <span style={{color:'#4ade80',fontSize:'12px'}} className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0"></span>онлайн</span>
                       : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>не в сети</span>)
                     : activeChat.type==='channel'
-                    ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>'📢 Канал · ' + (activeChatData?.subscribers?.length||0) + ' подп.'</span>
+                    ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>📢 Канал · {activeChatData?.subscribers?.length||0} подп.</span>
                     : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>{activeChatData?.members?.length||0} участников</span>}
                 </div>
               </div>
@@ -1682,6 +1800,86 @@ export default function WhisprPro() {
         </Modal>
       )}
 
+      {/* ══ WHISPR AI CHAT ══ */}
+      {showAiChat&&(
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4" style={{background:'rgba(0,0,0,0.75)',backdropFilter:'blur(16px)'}} onClick={()=>setShowAiChat(false)}>
+          <div className="w-full max-w-lg flex flex-col rounded-2xl overflow-hidden shadow-2xl" style={{height:'70vh',background:'#0e0e14',border:'1px solid rgba(255,255,255,0.09)'}} onClick={e=>e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 flex-shrink-0" style={{borderBottom:'1px solid rgba(255,255,255,0.06)'}}>
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>✦</div>
+                <div>
+                  <p className="text-white/90 font-semibold text-sm">Whispr AI</p>
+                  <p className="text-white/25 text-xs">Claude Haiku · бесплатно</p>
+                </div>
+              </div>
+              <div className="flex gap-2 items-center">
+                {aiMessages.length>0&&<button onClick={()=>setAiMessages([])} className="text-white/20 text-xs hover:text-white/50 transition-colors px-2 py-1 rounded-lg hover:bg-white/5">Очистить</button>}
+                <button onClick={()=>setShowAiChat(false)} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"><X className="w-4 h-4 text-white/30"/></button>
+              </div>
+            </div>
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3">
+              {aiMessages.length===0&&(
+                <div className="flex-1 flex flex-col items-center justify-center text-center py-12">
+                  <div className="text-4xl mb-3">✦</div>
+                  <p className="text-white/40 text-sm font-medium">Whispr AI</p>
+                  <p className="text-white/20 text-xs mt-1">Задай любой вопрос</p>
+                  <div className="mt-6 flex flex-wrap gap-2 justify-center">
+                    {['Привет! Кто ты?','Помоги написать сообщение','Переведи на английский'].map(s=>(
+                      <button key={s} onClick={()=>{setAiInput(s);}} className="px-3 py-1.5 rounded-xl text-xs text-white/40 hover:text-white/70 transition-colors" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)'}}>{s}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {aiMessages.map((m,i)=>(
+                <div key={i} className={`flex ${m.role==='user'?'justify-end':'justify-start'}`}>
+                  {m.role==='assistant'&&<div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm flex-shrink-0 mr-2 mt-0.5" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>✦</div>}
+                  <div className={`max-w-xs rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role==='user'?'rounded-br-sm':'rounded-bl-sm'}`}
+                    style={m.role==='user'
+                      ?{background:`linear-gradient(135deg,${T.a},${T.b})`,color:'#fff',boxShadow:`0 2px 12px ${T.a}40`}
+                      :{background:'rgba(255,255,255,0.06)',color:'rgba(255,255,255,0.85)',border:'1px solid rgba(255,255,255,0.07)'}}>
+                    {m.content.split('
+').map((line,j)=><span key={j}>{line}{j<m.content.split('
+').length-1&&<br/>}</span>)}
+                  </div>
+                </div>
+              ))}
+              {aiLoading&&(
+                <div className="flex justify-start">
+                  <div className="w-7 h-7 rounded-lg flex items-center justify-center text-sm flex-shrink-0 mr-2" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>✦</div>
+                  <div className="rounded-2xl rounded-bl-sm px-4 py-3" style={{background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.07)'}}>
+                    <div className="flex gap-1.5 items-center">
+                      <span className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce" style={{animationDelay:'0ms'}}/>
+                      <span className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce" style={{animationDelay:'150ms'}}/>
+                      <span className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce" style={{animationDelay:'300ms'}}/>
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div ref={aiEndRef}/>
+            </div>
+            {/* Input */}
+            <div className="flex-shrink-0 px-4 pb-4 pt-2">
+              <div className="flex gap-2 rounded-2xl p-1" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.07)'}}>
+                <input
+                  value={aiInput} onChange={e=>setAiInput(e.target.value)}
+                  onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!aiLoading){e.preventDefault();sendAiMessage();}}}
+                  placeholder="Спроси что-нибудь..."
+                  className="flex-1 bg-transparent px-3 py-2.5 text-sm text-white/80 outline-none placeholder-white/20"
+                  disabled={aiLoading}
+                />
+                <button onClick={sendAiMessage} disabled={aiLoading||!aiInput.trim()}
+                  className="px-4 py-2 rounded-xl text-sm font-medium text-white flex items-center gap-1.5 transition-all hover:opacity-85 active:scale-95 disabled:opacity-30"
+                  style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
+                  <Send className="w-3.5 h-3.5"/>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ══ ADMIN ══ */}
       {showAdminPanel&&currentUser?.isAdmin&&(
         <Modal onClose={()=>setShowAdminPanel(false)} wide>
@@ -1902,7 +2100,7 @@ export default function WhisprPro() {
 
       {/* ══ CALLS ══ */}
       {callState==='incoming'&&<IncomingCallOverlay from={callPeer} fromDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} fromAvatar={avatars[callPeer]} onAccept={acceptCall} onReject={rejectCall}/>}
-      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} audioRef={remoteAudioRef} remoteStream={remoteStreamRef.current} callType={callType} localVideoRef={localVideoRef} remoteVideoRef={remoteVideoRef}/>}
+      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} localStream={localStreamRef.current} remoteStream={remoteStreamRef.current} callType={callType}/>}
 
       <div style={{position:'fixed',bottom:8,left:'50%',transform:'translateX(-50%)',color:'rgba(255,255,255,0.07)',fontSize:'10px',pointerEvents:'none',letterSpacing:'0.15em',zIndex:100}}>by Meowlentii</div>
       <style>{CSS}</style>
