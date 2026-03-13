@@ -6,7 +6,7 @@ import {
   Plus, UserCheck, Hash, Settings, Phone, PhoneOff, Check,
   MoreVertical, Forward, Pencil, Users, Palette, Camera, AtSign,
   Pin, PinOff, Eye, EyeOff, Clock, Info, MessageSquare,
-  Radio, Video, VideoOff, PhoneMissed, PhoneIncoming, PhoneCall, Tv2, CornerUpLeft, Reply, Paperclip, FileText, Download, Globe
+  Radio, Video, VideoOff, PhoneMissed, PhoneIncoming, PhoneCall, Tv2, CornerUpLeft, Reply, Paperclip, FileText, Download, Globe, Smile
 } from 'lucide-react';
 
 const SERVER_URL = 'https://whispr-server-u5zy.onrender.com';
@@ -429,6 +429,11 @@ export default function WhisprPro() {
   const [imagePreview, setImagePreview] = useState(null); // {data, name, type, sizeStr}
   const [filePreview, setFilePreview] = useState(null);  // {data, name, mimeType, sizeStr}
   const [lightbox, setLightbox] = useState(null);        // {src, alt} — fullscreen photo viewer
+  const [showStickerPanel, setShowStickerPanel] = useState(false);
+  const [stickerTab, setStickerTab] = useState('stickers'); // 'stickers' | 'gif'
+  const [gifSearch, setGifSearch] = useState('');
+  const [gifResults, setGifResults] = useState([]);
+  const [gifLoading, setGifLoading] = useState(false);
   const [linkPreviews, setLinkPreviews] = useState({}); // {msgId: {title,desc,image,url}}
   // Кнопка звонка всегда видна
   const [callType, setCallType] = useState('audio'); // audio | video
@@ -563,7 +568,7 @@ export default function WhisprPro() {
         // Push notification
         if (pushEnabledRef.current && !document.hasFocus()) {
           const sender = msg.from;
-          const body = msg.type==='voice'?'🎤 Голосовое':msg.type==='video'?'📹 Видео':msg.type==='image'?'🖼 Фото':msg.text||'Новое сообщение';
+          const body = msg.type==='voice'?'🎤 Голосовое':msg.type==='video'?'📹 Видео':msg.type==='image'?'🖼 Фото':msg.type==='gif'?'GIF':msg.type==='sticker'?msg.text:msg.text||'Новое сообщение';
           try { new Notification(sender, { body, icon:'/favicon.ico', tag:`dm_${sender}` }); } catch(e) { /* push unavailable */ }
         }
       }
@@ -676,7 +681,7 @@ export default function WhisprPro() {
   const chatMessages = chatKey?(messages[chatKey]||[]):[];
   const prevMsgCount = useRef(0);
   useEffect(()=>{if(chatMessages.length>prevMsgCount.current)messagesEndRef.current?.scrollIntoView({behavior:'smooth'});prevMsgCount.current=chatMessages.length;},[chatMessages.length]);
-  useEffect(()=>{const h=()=>setMsgMenu(null);document.addEventListener('click',h);return()=>document.removeEventListener('click',h);},[]);
+  useEffect(()=>{const h=()=>{setMsgMenu(null);setShowStickerPanel(false);};document.addEventListener('click',h);return()=>document.removeEventListener('click',h);},[]);
 
   // Плавный переход чата
   useEffect(()=>{if(activeChat){setChatVisible(false);setTimeout(()=>setChatVisible(true),50);}},[activeChat?.id]);
@@ -996,6 +1001,57 @@ export default function WhisprPro() {
       localStreamRef.current.getVideoTracks().forEach(t => { t.stop(); localStreamRef.current.removeTrack(t); });
       setVideoEnabled(false);
     }
+  };
+
+  // ── СТИКЕРЫ / GIF ──
+  const STICKER_PACKS = {
+    'Смайлы': ['😀','😂','🥹','😍','🥰','😎','🤩','😭','😱','🤔','😴','🥳','😡','🤯','🥸','👻','💀','🤖','👾','🎃'],
+    'Жесты': ['👍','👎','👏','🙌','🤝','✌️','🤞','🫶','💪','🫠','🤦','🙏','🫡','👀','🫣','🤷','💅','🫰'],
+    'Природа': ['🐶','🐱','🐸','🦊','🐼','🐨','🦁','🐯','🦋','🌸','🌈','⭐','🔥','💧','🌊','🍀','🌙','☀️'],
+    'Еда': ['🍕','🍔','🌮','🍣','🍜','🍩','🍪','🎂','🍦','🧋','☕','🍺','🍷','🥂','🍾','🍰','🧇','🥞'],
+    'Активность': ['⚽','🏀','🎮','🎯','🎸','🎹','🎬','📸','🚀','✈️','🏖️','🎡','🎢','🎠','🏆','🥇','🎁','🎉'],
+  };
+
+  const searchGif = async (query) => {
+    if (!query.trim()) { setGifResults([]); return; }
+    setGifLoading(true);
+    try {
+      // Tenor v2 API — бесплатный ключ для разработки
+      const TENOR_KEY = 'AIzaSyAyimkuYQYF_FXVALexPzkcggASgTh8phI';
+      const res = await fetch(`https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=${TENOR_KEY}&limit=20&media_filter=gif`);
+      const data = await res.json();
+      const gifs = (data.results||[]).map(r => ({
+        id: r.id,
+        preview: r.media_formats?.tinygif?.url || r.media_formats?.gif?.url,
+        full: r.media_formats?.gif?.url || r.media_formats?.mediumgif?.url,
+        title: r.title,
+      })).filter(g => g.preview && g.full);
+      setGifResults(gifs);
+    } catch(e) {
+      console.error('GIF search error:', e);
+      setGifResults([]);
+    }
+    setGifLoading(false);
+  };
+
+  const sendSticker = (emoji) => {
+    const chat = activeChatRef.current;
+    if (!chat || !socket) return;
+    const payload = { text: emoji, type: 'sticker' };
+    if (chat.type==='direct') socket.emit('send_message', {to:chat.id, ...payload}, ()=>{});
+    else if (chat.type==='group') socket.emit('send_group_message', {groupId:chat.id, ...payload}, ()=>{});
+    else if (chat.type==='channel') socket.emit('send_channel_message', {channelId:chat.id, ...payload}, ()=>{});
+    setShowStickerPanel(false);
+  };
+
+  const sendGif = (gif) => {
+    const chat = activeChatRef.current;
+    if (!chat || !socket) return;
+    const payload = { text: gif.title||'GIF', type: 'gif', audioData: gif.full };
+    if (chat.type==='direct') socket.emit('send_message', {to:chat.id, ...payload}, ()=>{});
+    else if (chat.type==='group') socket.emit('send_group_message', {groupId:chat.id, ...payload}, ()=>{});
+    else if (chat.type==='channel') socket.emit('send_channel_message', {channelId:chat.id, ...payload}, ()=>{});
+    setShowStickerPanel(false);
   };
 
   const formatFileSize = (bytes) => {
@@ -1466,6 +1522,15 @@ export default function WhisprPro() {
                                 </div>
                               )}
                             </div>
+                          ):msg.type==='sticker'?(
+                            <div className="text-5xl leading-none select-none" style={{filter:'drop-shadow(0 2px 8px rgba(0,0,0,0.3))'}}>{msg.text}</div>
+                          ):msg.type==='gif'?(
+                            <div className="relative max-w-xs">
+                              <img src={msg.audioData} alt={msg.text||'GIF'} className="rounded-2xl max-w-full cursor-zoom-in hover:opacity-90 transition-opacity"
+                                style={{maxHeight:'240px',objectFit:'cover'}}
+                                onClick={()=>setLightbox({src:msg.audioData, alt:'GIF'})}/>
+                              <div className="absolute bottom-2 left-2 text-[10px] font-bold text-white/80 px-1.5 py-0.5 rounded" style={{background:'rgba(0,0,0,0.5)'}}>GIF</div>
+                            </div>
                           ):msg.type==='image'?(
                             <div className="relative max-w-xs">
                               <img src={msg.audioData} alt={msg.text||'фото'} className="rounded-2xl max-w-full cursor-zoom-in hover:opacity-90 transition-opacity"
@@ -1649,6 +1714,62 @@ export default function WhisprPro() {
                     placeholder="Напишите сообщение..."/>
                   <input ref={fileInputRef} type="file" accept="image/*,video/*,.pdf,.doc,.docx,.txt,.zip" className="hidden" onChange={handleFileSelect}/>
                   <button type="button" onClick={()=>fileInputRef.current?.click()} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Прикрепить файл"><Paperclip className="w-5 h-5 text-white/25"/></button>
+                  <div className="relative flex-shrink-0">
+                    <button type="button" onClick={()=>setShowStickerPanel(p=>!p)} className="p-3 rounded-2xl hover:bg-white/5 transition-colors" style={{border:'1px solid rgba(255,255,255,0.06)',background:showStickerPanel?'rgba(255,255,255,0.07)':'transparent'}} title="Стикеры и GIF">
+                      <Smile className="w-5 h-5 text-white/25"/>
+                    </button>
+                    {showStickerPanel&&(
+                      <div className="absolute bottom-14 right-0 w-80 rounded-2xl overflow-hidden shadow-2xl z-50" style={{background:'rgba(12,12,20,0.98)',border:'1px solid rgba(255,255,255,0.08)',animation:'popIn 0.15s ease'}} onClick={e=>e.stopPropagation()}>
+                        {/* Табы */}
+                        <div className="flex border-b border-white/5">
+                          <button onClick={()=>setStickerTab('stickers')} className="flex-1 py-2.5 text-xs font-medium transition-colors" style={{color:stickerTab==='stickers'?'#fff':'rgba(255,255,255,0.3)',borderBottom:stickerTab==='stickers'?`2px solid ${T.a}`:'2px solid transparent'}}>😄 Стикеры</button>
+                          <button onClick={()=>{setStickerTab('gif');if(!gifResults.length)searchGif('funny');}} className="flex-1 py-2.5 text-xs font-medium transition-colors" style={{color:stickerTab==='gif'?'#fff':'rgba(255,255,255,0.3)',borderBottom:stickerTab==='gif'?`2px solid ${T.a}`:'2px solid transparent'}}>GIF</button>
+                        </div>
+                        {stickerTab==='stickers'?(
+                          <div className="overflow-y-auto" style={{maxHeight:280}}>
+                            {Object.entries(STICKER_PACKS).map(([pack, emojis])=>(
+                              <div key={pack}>
+                                <div className="px-3 pt-3 pb-1 text-[10px] font-semibold text-white/20 uppercase tracking-wider">{pack}</div>
+                                <div className="grid grid-cols-8 gap-0.5 px-2 pb-2">
+                                  {emojis.map(e=>(
+                                    <button key={e} onClick={()=>sendSticker(e)}
+                                      className="w-9 h-9 text-2xl flex items-center justify-center rounded-xl hover:bg-white/10 transition-all hover:scale-125 active:scale-95">
+                                      {e}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ):(
+                          <div>
+                            <div className="p-2">
+                              <input value={gifSearch} onChange={e=>{setGifSearch(e.target.value);searchGif(e.target.value);}}
+                                placeholder="Поиск GIF..."
+                                className="w-full px-3 py-2 rounded-xl text-white/80 text-sm outline-none"
+                                style={{background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.08)'}}/>
+                            </div>
+                            <div className="overflow-y-auto px-2 pb-2" style={{maxHeight:240}}>
+                              {gifLoading?(
+                                <div className="flex justify-center py-8"><div className="w-6 h-6 rounded-full border-2 border-white/20 border-t-white/60" style={{animation:'spin 0.8s linear infinite'}}/></div>
+                              ):gifResults.length?(
+                                <div className="grid grid-cols-2 gap-1.5">
+                                  {gifResults.map(g=>(
+                                    <button key={g.id} onClick={()=>sendGif(g)}
+                                      className="rounded-xl overflow-hidden hover:opacity-80 transition-opacity hover:scale-[1.02]" style={{aspectRatio:'16/10'}}>
+                                      <img src={g.preview} alt={g.title} className="w-full h-full object-cover"/>
+                                    </button>
+                                  ))}
+                                </div>
+                              ):(
+                                <div className="text-center py-8 text-white/20 text-sm">Введите запрос для поиска</div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   <button type="button" onClick={startRecording} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}}><Mic className="w-5 h-5 text-white/25"/></button>
                   <button type="button" onClick={startVideoRecording} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Видео-сообщение"><Video className="w-5 h-5 text-white/25"/></button>
                   <button type="submit" className="px-5 py-3 rounded-2xl font-medium text-white text-sm flex items-center gap-2 flex-shrink-0 transition-all hover:opacity-85 active:scale-95"
