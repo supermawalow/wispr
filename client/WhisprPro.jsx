@@ -182,32 +182,49 @@ function IncomingCallOverlay({ from, fromDisplay, fromAvatar, onAccept, onReject
   );
 }
 
-function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, calling, localVidRef, remoteVidRef, remoteAudioRef, callType }) {
+function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, calling, localStream, remoteStream, callType }) {
   const fmt = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
   const isVideo = callType === 'video';
+  const localVidRef  = useRef(null);
+  const remoteVidRef = useRef(null);
+  const remoteAudioRef = useRef(null);
+
+  useEffect(() => {
+    if (localVidRef.current && localStream) {
+      localVidRef.current.srcObject = localStream;
+      localVidRef.current.play().catch(()=>{});
+    }
+  }, [localStream]);
+
+  useEffect(() => {
+    if (!remoteStream) return;
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = remoteStream;
+      remoteAudioRef.current.play().catch(()=>{});
+    }
+    if (remoteVidRef.current) {
+      remoteVidRef.current.srcObject = remoteStream;
+      remoteVidRef.current.play().catch(()=>{});
+    }
+  }, [remoteStream]);
 
   if (isVideo) {
     return (
       <div className="fixed inset-0 z-[200]" style={{background:'#000',animation:'fadeIn 0.2s ease'}}>
-        {/* Remote — fullscreen */}
         <video ref={remoteVidRef} autoPlay playsInline muted={false}
           className="absolute inset-0 w-full h-full object-cover"
           style={{background:'#0a0a0a'}}/>
-        {/* Local — PiP top-right */}
         <video ref={localVidRef} autoPlay playsInline muted
           className="absolute rounded-2xl object-cover"
           style={{top:16,right:16,width:120,height:160,zIndex:10,
             border:'2px solid rgba(255,255,255,0.25)',
             boxShadow:'0 4px 24px rgba(0,0,0,0.8)',
             background:'#1a1a1a'}}/>
-        {/* Controls */}
         <div className="absolute bottom-10 left-0 right-0 flex justify-center" style={{zIndex:20}}>
           <div className="flex flex-col items-center gap-3 px-8 py-5 rounded-3xl"
             style={{background:'rgba(0,0,0,0.65)',backdropFilter:'blur(20px)',border:'1px solid rgba(255,255,255,0.1)'}}>
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0">
-                <Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="sm"/>
-              </div>
+              <Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="sm"/>
               <div className="text-left">
                 <p className="text-white font-semibold text-sm leading-tight">{peerDisplay||peer}</p>
                 <p className={`text-xs font-mono ${calling?'text-white/40 animate-pulse':'text-green-400'}`}>
@@ -218,14 +235,14 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
             <div className="flex gap-4">
               {!calling&&(
                 <button onClick={onMute}
-                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all active:scale-90 ${muted?'border border-yellow-500/50':'border border-white/15'}`}
-                  style={{background:muted?'rgba(234,179,8,0.2)':'rgba(255,255,255,0.1)'}}>
+                  className="w-12 h-12 rounded-full flex items-center justify-center transition-all active:scale-90"
+                  style={{background:muted?'rgba(234,179,8,0.2)':'rgba(255,255,255,0.1)',border:muted?'1px solid rgba(234,179,8,0.5)':'1px solid rgba(255,255,255,0.15)'}}>
                   {muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/60"/>}
                 </button>
               )}
               <button onClick={onEnd}
                 className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-90"
-                style={{background:'#ef4444',border:'1px solid rgba(239,68,68,0.5)',boxShadow:'0 0 20px rgba(239,68,68,0.4)'}}>
+                style={{background:'#ef4444',boxShadow:'0 0 20px rgba(239,68,68,0.4)'}}>
                 <PhoneOff className="w-6 h-6 text-white"/>
               </button>
             </div>
@@ -236,7 +253,6 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
     );
   }
 
-  // Аудио-звонок
   return (
     <div className="fixed inset-0 flex items-center justify-center z-[200]"
       style={{background:'rgba(0,0,0,0.88)',backdropFilter:'blur(24px)',animation:'fadeIn 0.2s ease'}}>
@@ -252,8 +268,8 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
         <div className="flex justify-center gap-4">
           {!calling&&(
             <button onClick={onMute}
-              className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105 ${muted?'border border-yellow-500/40':'border border-white/10'}`}
-              style={{background:muted?'rgba(234,179,8,0.15)':'rgba(255,255,255,0.06)'}}>
+              className="w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105"
+              style={{background:muted?'rgba(234,179,8,0.15)':'rgba(255,255,255,0.06)',border:muted?'1px solid rgba(234,179,8,0.4)':'1px solid rgba(255,255,255,0.1)'}}>
               {muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/50"/>}
             </button>
           )}
@@ -326,11 +342,11 @@ export default function WhisprPro() {
   const [callPeer, setCallPeer] = useState(null);
   const [callDuration, setCallDuration] = useState(0);
   const [callMuted, setCallMuted] = useState(false);
-  const [remoteStreamState, setRemoteStreamState] = useState(null); // для ре-рендера overlay
+  const [remoteStreamState, setRemoteStreamState] = useState(null);
+  const [localStreamState, setLocalStreamState] = useState(null);
   const peerConnectionRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
-  const remoteAudioRef = useRef(null);
   const callTimerRef = useRef(null);
   const callPeerRef = useRef(null);
   const incomingOfferRef = useRef(null);
@@ -399,8 +415,6 @@ export default function WhisprPro() {
   const [showCallHistory, setShowCallHistory] = useState(false);
   // Видео-звонок
   const [videoEnabled, setVideoEnabled] = useState(false);
-  const localVidRef = useRef(null);   // <video> для своей камеры в звонке
-  const remoteVidRef = useRef(null);  // <video> для камеры собеседника в звонке
   // Кружочки (видео-сообщения)
   const [isVideoRecording, setIsVideoRecording] = useState(false);
   const [videoRecordingTime, setVideoRecordingTime] = useState(0);
@@ -461,8 +475,8 @@ export default function WhisprPro() {
     clearInterval(callTimerRef.current);
     remoteStreamRef.current=null;
     setRemoteStreamState(null);
+    setLocalStreamState(null);
     pendingIceCandidatesRef.current=[];
-    const a=remoteAudioRef.current; if(a) a.srcObject=null;
     setCallState('idle'); setCallPeer(null); setCallDuration(0); setCallMuted(false);
     callPeerRef.current=null; incomingOfferRef.current=null;
   }, []);
@@ -475,7 +489,7 @@ export default function WhisprPro() {
         video: isVideo ? { facingMode:'user', width:{ideal:640}, height:{ideal:480} } : false
       });
       localStreamRef.current = stream;
-      if (isVideo && localVidRef.current) { localVidRef.current.srcObject = stream; localVidRef.current.play().catch(()=>{}); }
+      setLocalStreamState(stream);
       setCallType(ct);
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
@@ -484,8 +498,6 @@ export default function WhisprPro() {
         const s = e.streams?.[0] || new MediaStream([e.track]);
         remoteStreamRef.current = s;
         setRemoteStreamState(s);
-        if (remoteAudioRef.current) { remoteAudioRef.current.srcObject = s; remoteAudioRef.current.play().catch(()=>{}); }
-        if (remoteVidRef.current && isVideo) { remoteVidRef.current.srcObject = s; remoteVidRef.current.play().catch(()=>{}); }
       };
       pc.onicecandidate = e => { if(e.candidate) socketRef.current?.emit('ice_candidate',{to:toUsername,candidate:e.candidate}); };
       pc.onconnectionstatechange = () => { if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); };
@@ -504,7 +516,7 @@ export default function WhisprPro() {
         video: isVideo ? { facingMode:'user', width:{ideal:640}, height:{ideal:480} } : false
       });
       localStreamRef.current = stream;
-      if (isVideo && localVidRef.current) { localVidRef.current.srcObject = stream; localVidRef.current.play().catch(()=>{}); }
+      setLocalStreamState(stream);
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
@@ -512,8 +524,6 @@ export default function WhisprPro() {
         const s = e.streams?.[0] || new MediaStream([e.track]);
         remoteStreamRef.current = s;
         setRemoteStreamState(s);
-        if (remoteAudioRef.current) { remoteAudioRef.current.srcObject = s; remoteAudioRef.current.play().catch(()=>{}); }
-        if (remoteVidRef.current && isVideo) { remoteVidRef.current.srcObject = s; remoteVidRef.current.play().catch(()=>{}); }
       };
       pc.onicecandidate = e => { if(e.candidate) socketRef.current?.emit('ice_candidate',{to:callPeerRef.current,candidate:e.candidate}); };
       pc.onconnectionstatechange = () => { if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); };
@@ -977,15 +987,12 @@ export default function WhisprPro() {
       try {
         const vs = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});
         vs.getVideoTracks().forEach(t => localStreamRef.current.addTrack(t));
-        if (localVidRef.current) { localVidRef.current.srcObject = localStreamRef.current; localVidRef.current.play().catch(()=>{}); }
         peerConnectionRef.current?.getSenders().forEach(s => { if(s.track?.kind==='audio'){} });
-        // add video track to peer connection
         vs.getVideoTracks().forEach(t => peerConnectionRef.current?.addTrack(t, localStreamRef.current));
         setVideoEnabled(true);
       } catch(e) { alert('Нет доступа к камере'); }
     } else {
       localStreamRef.current.getVideoTracks().forEach(t => { t.stop(); localStreamRef.current.removeTrack(t); });
-      if (localVidRef.current) localVidRef.current.srcObject = null;
       setVideoEnabled(false);
     }
   };
@@ -2161,7 +2168,7 @@ export default function WhisprPro() {
 
       {/* ══ CALLS ══ */}
       {callState==='incoming'&&<IncomingCallOverlay from={callPeer} fromDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} fromAvatar={avatars[callPeer]} onAccept={acceptCall} onReject={rejectCall}/>}
-      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} localVidRef={localVidRef} remoteVidRef={remoteVidRef} remoteAudioRef={remoteAudioRef} callType={callType}/>}
+      {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} localStream={localStreamState} remoteStream={remoteStreamState} callType={callType}/>}
 
       {/* ── LIGHTBOX — полноэкранный просмотр фото ── */}
       {lightbox&&(
