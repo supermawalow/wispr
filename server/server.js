@@ -114,12 +114,14 @@ const AdminLog = mongoose.model('AdminLog', adminLogSchema);
 //  ИНИЦИАЛИЗАЦИЯ ADMIN
 // ══════════════════════════════════════════
 mongoose.connection.once('open', async () => {
+  // Пересоздаём индексы (защита после очистки коллекций в MongoDB Atlas)
+  try { await Promise.all([Message.ensureIndexes(), User.ensureIndexes(), Group.ensureIndexes(), Channel.ensureIndexes()]); } catch(e) { console.warn('ensureIndexes:', e.message); }
+
   const admin = await User.findOne({ username: 'admin' });
   if (!admin) {
     await User.create({ username: 'admin', displayName: 'Администратор', password: 'mawadmin201223', isAdmin: true });
     console.log('👑 Admin создан');
   } else {
-    // Обновляем пароль если уже существует
     await User.updateOne({ username: 'admin' }, { password: 'mawadmin201223' });
     console.log('👑 Admin пароль обновлён');
   }
@@ -683,7 +685,7 @@ io.on('connection', (socket) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return cb({ success: false, error: 'Не авторизован' });
     try {
-      const { name, username, description, isPrivate } = data;
+      const { name, username, description } = data;
       if (!name?.trim()) return cb({ success: false, error: 'Нужно название' });
       // Проверить уникальность username
       if (username) {
@@ -694,7 +696,7 @@ io.on('connection', (socket) => {
       }
       const channel = await Channel.create({
         name: name.trim(), username: username?.toLowerCase() || null,
-        description: description || '', isPrivate: !!isPrivate,
+        description: description || '', isPrivate: false,
         owner: me, admins: [me], subscribers: [me]
       });
       cb({ success: true, channel });
@@ -704,7 +706,7 @@ io.on('connection', (socket) => {
   socket.on('search_channels', async (query, cb) => {
     try {
       const channels = await Channel.find({
-        isPrivate: false,
+
         $or: [
           { name: { $regex: query, $options: 'i' } },
           { username: { $regex: query, $options: 'i' } }
@@ -737,7 +739,7 @@ io.on('connection', (socket) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return cb({ success: false });
     try {
-      const { channelId, name, username, description, avatar, isPrivate } = data;
+      const { channelId, name, username, description, avatar } = data;
       const ch = await Channel.findById(channelId);
       if (!ch) return cb({ success: false, error: 'Не найден' });
       if (ch.owner !== me && !ch.admins.includes(me)) return cb({ success: false, error: 'Нет прав' });
@@ -749,7 +751,7 @@ io.on('connection', (socket) => {
       if (username !== undefined) ch.username = username?.toLowerCase() || null;
       if (description !== undefined) ch.description = description;
       if (avatar !== undefined) ch.avatar = avatar;
-      if (isPrivate !== undefined) ch.isPrivate = isPrivate;
+      ch.isPrivate = false; // Каналы всегда публичные
       await ch.save();
       // Уведомить подписчиков
       for (const sub of ch.subscribers) {

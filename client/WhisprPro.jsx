@@ -184,38 +184,70 @@ function IncomingCallOverlay({ from, fromDisplay, fromAvatar, onAccept, onReject
 
 function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onMute, onEnd, calling, audioRef, remoteStream, callType, localVideoRef, remoteVideoRef }) {
   const fmt = s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
-  const localRef = useRef(null);
-  const resolved = audioRef||localRef;
-  useEffect(() => {
-    if (!remoteStream) return;
-    const el = resolved.current;
-    if (!el) return;
-    el.srcObject = remoteStream;
-    const tryPlay = () => el.play().catch(() => setTimeout(tryPlay, 800));
-    tryPlay();
-    if (remoteVideoRef?.current) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.play().catch(()=>{});
-    }
-  }, [remoteStream]);
+  const audioElRef = useRef(null);
+  const remoteVidEl = useRef(null);
   const isVideo = callType === 'video';
-  return (
-    <div className="fixed inset-0 flex items-center justify-center z-[200]" style={{background:'rgba(0,0,0,0.92)',backdropFilter:'blur(20px)',animation:'fadeIn 0.2s ease'}}>
-      {isVideo&&<video ref={remoteVideoRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover" style={{opacity:0.85}}/>}
-      <div className={`rounded-3xl p-8 text-center shadow-2xl relative z-10 ${isVideo?'w-96':'w-80'}`} style={{background:isVideo?'rgba(0,0,0,0.55)':'#111116',border:'1px solid rgba(255,255,255,0.08)'}}>
-        {isVideo&&<video ref={localVideoRef} autoPlay muted playsInline className="absolute top-4 right-4 w-28 h-28 rounded-2xl object-cover" style={{border:'2px solid rgba(255,255,255,0.25)',boxShadow:'0 4px 20px rgba(0,0,0,0.5)'}}/>}
-        <div className="mb-4 flex justify-center">
-          {!isVideo&&<Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="lg"/>}
-          {isVideo&&<div className="w-16 h-16 rounded-full overflow-hidden border-2 border-white/20"><Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="lg"/></div>}
+
+  // Подключить аудио поток
+  useEffect(() => {
+    const el = audioRef?.current || audioElRef.current;
+    if (el && remoteStream) { el.srcObject = remoteStream; el.play().catch(()=>{}); }
+  }, [remoteStream]);
+
+  // Подключить видео поток к remote video элементу
+  useEffect(() => {
+    const el = remoteVideoRef?.current || remoteVidEl.current;
+    if (el && remoteStream && isVideo) {
+      el.srcObject = remoteStream;
+      el.play().catch(()=>{});
+    }
+  }, [remoteStream, isVideo]);
+
+  if (isVideo) {
+    return (
+      <div className="fixed inset-0 z-[200] flex items-end justify-center pb-10"
+        style={{background:'#000',animation:'fadeIn 0.2s ease'}}>
+        {/* Remote video — fullscreen background */}
+        <video ref={remoteVidEl} autoPlay playsInline
+          className="absolute inset-0 w-full h-full object-cover"
+          style={{background:'#111'}}/>
+        {/* Local video — PiP top-right */}
+        <video ref={localVideoRef} autoPlay muted playsInline
+          className="absolute top-4 right-4 rounded-2xl object-cover"
+          style={{width:110,height:150,border:'2px solid rgba(255,255,255,0.3)',boxShadow:'0 4px 24px rgba(0,0,0,0.7)',background:'#222',zIndex:10}}/>
+        {/* Controls bar */}
+        <div className="relative z-10 flex flex-col items-center gap-4"
+          style={{background:'rgba(0,0,0,0.55)',backdropFilter:'blur(16px)',borderRadius:24,padding:'16px 32px',border:'1px solid rgba(255,255,255,0.1)'}}>
+          <div className="flex items-center gap-3">
+            <Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="sm"/>
+            <div>
+              <p className="text-white font-semibold text-sm">{peerDisplay||peer}</p>
+              <p className={`text-xs font-mono ${calling?'text-white/40 animate-pulse':'text-green-400'}`}>{calling?'Подключение...':fmt(duration)}</p>
+            </div>
+          </div>
+          <div className="flex gap-4">
+            {!calling&&<button onClick={onMute} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105 ${muted?'bg-yellow-500/20 border border-yellow-500/40':'bg-white/10 border border-white/15'}`}>{muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/60"/>}</button>}
+            <button onClick={onEnd} className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95" style={{background:'rgba(239,68,68,0.85)',border:'1px solid rgba(239,68,68,0.5)'}}><PhoneOff className="w-6 h-6 text-white"/></button>
+          </div>
         </div>
+        <audio ref={audioElRef} id="remoteAudio" autoPlay playsInline />
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 flex items-center justify-center z-[200]"
+      style={{background:'rgba(0,0,0,0.88)',backdropFilter:'blur(24px)',animation:'fadeIn 0.2s ease'}}>
+      <div className="rounded-3xl p-10 text-center w-80 shadow-2xl" style={{background:'#111116',border:'1px solid rgba(255,255,255,0.08)',animation:'slideUp 0.25s cubic-bezier(0.34,1.4,0.64,1)'}}>
+        <div className="mb-5 flex justify-center"><Avatar username={peer} displayName={peerDisplay} avatar={peerAvatar} size="lg"/></div>
         <p className="text-white text-xl font-bold mb-1">{peerDisplay||peer}</p>
-        <p className={`text-sm mb-6 font-mono ${calling?'text-white/30 animate-pulse tracking-wide':'text-green-400 tracking-widest'}`}>{calling?'Вызов...':fmt(duration)}</p>
+        <p className={`text-sm mb-8 font-mono tracking-widest ${calling?'text-white/30 animate-pulse':'text-green-400'}`}>{calling?'Вызов...':fmt(duration)}</p>
         <div className="flex justify-center gap-4">
-          {!calling&&<button onClick={onMute} title={muted?'Включить микрофон':'Выключить микрофон'} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105 border ${muted?'border-yellow-500/30 bg-yellow-500/10':'border-white/10 bg-white/5'}`}>{muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/50"/>}</button>}
-          <button onClick={onEnd} title="Завершить" className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105" style={{background:'rgba(239,68,68,0.2)',border:'1px solid rgba(239,68,68,0.4)'}}><PhoneOff className="w-6 h-6 text-red-400"/></button>
+          {!calling&&<button onClick={onMute} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-105 ${muted?'bg-yellow-500/20 border border-yellow-500/40':'bg-white/8 border border-white/10'}`}>{muted?<MicOff className="w-5 h-5 text-yellow-400"/>:<Mic className="w-5 h-5 text-white/50"/>}</button>}
+          <button onClick={onEnd} className="w-14 h-14 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95" style={{background:'rgba(239,68,68,0.2)',border:'1px solid rgba(239,68,68,0.4)'}}><PhoneOff className="w-6 h-6 text-red-400"/></button>
         </div>
       </div>
-      <audio ref={resolved} id="remoteAudio" autoPlay playsInline />
+      <audio ref={audioElRef} id="remoteAudio" autoPlay playsInline />
     </div>
   );
 }
@@ -327,7 +359,7 @@ export default function WhisprPro() {
   // Каналы
   const [channels, setChannels] = useState([]);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
-  const [channelForm, setChannelForm] = useState({name:'',username:'',description:'',isPrivate:false});
+  const [channelForm, setChannelForm] = useState({name:'',username:'',description:''});
   const [showChannelSettings, setShowChannelSettings] = useState(false);
   const [editingChannel, setEditingChannel] = useState(null);
   const [channelSettingsForm, setChannelSettingsForm] = useState({});
@@ -389,7 +421,7 @@ export default function WhisprPro() {
     iceCandidatePoolSize: 10,
   };
 
-  useEffect(() => { try { localStorage.setItem('whispr_theme',theme); } catch(e) {} }, [theme]);
+  useEffect(() => { try { localStorage.setItem('whispr_theme',theme); } catch(e) { /* storage unavailable */ } }, [theme]);
 
   const cleanupCall = useCallback(() => {
     if (peerConnectionRef.current) { peerConnectionRef.current.close(); peerConnectionRef.current=null; }
@@ -517,7 +549,6 @@ export default function WhisprPro() {
     s.on('messages_read', ({by}) => setMessages(p=>p[by]?{...p,[by]:p[by].map(m=>({...m,read:true}))}:p));
     s.on('reaction_updated', ({messageId,reactions}) => setMessages(p=>{const u={...p};for(const k of Object.keys(u))u[k]=u[k].map(m=>(m._id===messageId||m.id===messageId)?{...m,reactions}:m);return u;}));
     s.on('avatar_updated', ({username,avatar}) => setAvatars(p=>({...p,[username]:avatar})));
-    s.on('incoming_call', ({from,offer}) => { callPeerRef.current=from; incomingOfferRef.current=offer; setCallPeer(from); setCallState('incoming'); });
     s.on('call_answered', async({answer}) => {
       try {
         const pc = peerConnectionRef.current;
@@ -526,7 +557,7 @@ export default function WhisprPro() {
         const pending = [...pendingIceCandidatesRef.current];
         pendingIceCandidatesRef.current = [];
         for (const cand of pending) {
-          try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch(icErr) {}
+          try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch(icErr) { /* expected */ }
         }
         setCallState('active');
         callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
@@ -568,8 +599,6 @@ export default function WhisprPro() {
         setPinnedMessage(p => ({...p, [groupId]: null}));
       }
     });
-    // Счётчик непрочитанных — увеличиваем при новом сообщении если чат не активен
-    s.on('new_message', msg => {}); // уже обрабатывается выше
     return ()=>{s.close();cleanupCall();};
   }, []);
 
@@ -608,8 +637,8 @@ export default function WhisprPro() {
   useEffect(()=>{if(activeChat){setChatVisible(false);setTimeout(()=>setChatVisible(true),50);}},[activeChat?.id]);
 
   const handleRegister = e => { e.preventDefault();setAuthError('');socket.emit('register',{username,displayName,password},res=>{if(res.success)handleLogin(e);else setAuthError(res.error);}); };
-  const handleLogin = e => { e.preventDefault();setAuthError('');socket.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){}setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
-  const handleLogout = () => { cleanupCall();try{localStorage.removeItem('whispr_creds');}catch(e){}setIsAuthenticated(false);setCurrentUser(null);setContacts([]);setGroups([]);setActiveChat(null);setMessages({});setUsername('');setPassword('');setDisplayName(''); };
+  const handleLogin = e => { e.preventDefault();setAuthError('');socket.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){/* storage unavailable */}setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
+  const handleLogout = () => { cleanupCall();try{localStorage.removeItem('whispr_creds');}catch(e){/* storage unavailable */}setIsAuthenticated(false);setCurrentUser(null);setContacts([]);setGroups([]);setActiveChat(null);setMessages({});setUsername('');setPassword('');setDisplayName(''); };
 
   const handleAvatarUpload = (e, fromSettings=false) => {
     const f=e.target.files[0]; if(!f)return;
@@ -645,7 +674,7 @@ export default function WhisprPro() {
         if(res.user.username!==currentUser.username){
           setActiveChat(null);setMessages({});setContacts([]);
           const savedP=savedCredsRef.current?.p||password||currentPassword;
-          try{localStorage.setItem('whispr_creds',JSON.stringify({u:res.user.username,p:savedP}));}catch(e){}
+          try{localStorage.setItem('whispr_creds',JSON.stringify({u:res.user.username,p:savedP}));}catch(e){/* storage unavailable */}
           socket.emit('login',{username:res.user.username,password:savedP},r2=>{if(r2.success){setContacts(r2.contacts||[]);setGroups(r2.groups||[]);}});
         }
         setProfileSuccess('Профиль обновлён!');
@@ -780,14 +809,13 @@ export default function WhisprPro() {
       name: channelForm.name.trim(),
       username: channelForm.username.trim() || null,
       description: channelForm.description.trim(),
-      isPrivate: channelForm.isPrivate
     };
     socket.emit('create_channel', payload, res => {
       if (!res) { alert('Нет ответа от сервера'); return; }
       if (res.success) {
         setChannels(p => [...p, res.channel]);
         setShowCreateChannel(false);
-        setChannelForm({name:'',username:'',description:'',isPrivate:false});
+        setChannelForm({name:'',username:'',description:''});
         openChannelChat(res.channel);
       } else {
         alert('Ошибка: ' + (res.error || 'неизвестная'));
@@ -1112,7 +1140,7 @@ export default function WhisprPro() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className={`text-sm font-medium truncate ${activeChat?.type==='channel'&&activeChat.id===ch._id?'text-white':'text-white/60'}`}>{ch.name}</div>
-                <div className="text-xs text-white/20">{ch.isPrivate?'🔒 Приватный':'📢 Публичный'} · {ch.subscribers.length}</div>
+                <div className="text-xs text-white/20">'📢 Канал · ' + ch.subscribers.length + ' подп.'</div>
               </div>
               {(unreadCounts[`channel_${ch._id}`]||0)>0&&<span className="flex-shrink-0 min-w-[18px] h-[18px] rounded-full text-[10px] font-bold text-white flex items-center justify-center px-1" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{unreadCounts[`channel_${ch._id}`]}</span>}
             </div>
@@ -1137,7 +1165,7 @@ export default function WhisprPro() {
                       ? <span style={{color:'#4ade80',fontSize:'12px'}} className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0"></span>онлайн</span>
                       : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>не в сети</span>)
                     : activeChat.type==='channel'
-                    ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>{activeChatData?.isPrivate?'🔒 Приватный':'📢 Публичный'} · {activeChatData?.subscribers?.length||0} подп.</span>
+                    ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>'📢 Канал · ' + (activeChatData?.subscribers?.length||0) + ' подп.'</span>
                     : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>{activeChatData?.members?.length||0} участников</span>}
                 </div>
               </div>
@@ -1149,7 +1177,7 @@ export default function WhisprPro() {
               </>)}
               <button onClick={()=>{setShowMsgSearch(s=>!s);setMsgSearchQuery('');setMsgSearchResults([]);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Поиск по сообщениям"><Search className="w-4 h-4 text-white/30 hover:text-white/60 transition-colors"/></button>
               {activeChat.type==='group'&&<button onClick={()=>setShowGroupInfo(true)} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0"><Settings className="w-4 h-4 text-white/30"/></button>}
-              {activeChat.type==='channel'&&<button onClick={()=>{setEditingChannel(activeChatData);setChannelSettingsForm({name:activeChatData?.name||'',username:activeChatData?.username||'',description:activeChatData?.description||'',isPrivate:!!activeChatData?.isPrivate});setShowChannelSettings(true);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Настройки канала"><Settings className="w-4 h-4 text-white/30"/></button>}
+              {activeChat.type==='channel'&&<button onClick={()=>{setEditingChannel(activeChatData);setChannelSettingsForm({name:activeChatData?.name||'',username:activeChatData?.username||'',description:activeChatData?.description||''});setShowChannelSettings(true);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Настройки канала"><Settings className="w-4 h-4 text-white/30"/></button>}
             </div>
 
             {/* Поиск по сообщениям */}
@@ -1755,10 +1783,6 @@ export default function WhisprPro() {
               <textarea value={channelForm.description} onChange={e=>setChannelForm(p=>({...p,description:e.target.value}))} rows={2}
                 className="w-full px-4 py-3 rounded-xl text-white/80 text-sm outline-none placeholder-white/20 resize-none"
                 style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.07)'}} placeholder="Описание (необязательно)"/>
-              <label className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer" style={{background:'rgba(255,255,255,0.03)'}}>
-                <input type="checkbox" checked={channelForm.isPrivate} onChange={e=>setChannelForm(p=>({...p,isPrivate:e.target.checked}))} className="w-4 h-4"/>
-                <div><div className="text-white/60 text-sm">Приватный канал</div><div className="text-white/25 text-xs">Только по ссылке</div></div>
-              </label>
               <button type="submit" className="w-full py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>Создать канал</button>
             </form>
             {/* Поиск публичных каналов */}
@@ -1825,10 +1849,7 @@ export default function WhisprPro() {
               <textarea value={channelSettingsForm.description||''} onChange={e=>setChannelSettingsForm(p=>({...p,description:e.target.value}))} rows={2}
                 className="w-full px-4 py-3 rounded-xl text-white/80 text-sm outline-none placeholder-white/20 resize-none"
                 style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.07)'}} placeholder="Описание канала"/>
-              <label className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.05)'}}>
-                <input type="checkbox" checked={channelSettingsForm.isPrivate||false} onChange={e=>setChannelSettingsForm(p=>({...p,isPrivate:e.target.checked}))} className="w-4 h-4 accent-violet-500"/>
-                <div><div className="text-white/60 text-sm">🔒 Приватный канал</div><div className="text-white/25 text-xs">Скрыт из поиска, доступ только по ссылке</div></div>
-              </label>
+
 
               <button type="submit" className="w-full py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 transition-opacity" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>💾 Сохранить</button>
               <button type="button" onClick={()=>{if(confirm('Удалить канал навсегда?'))socket.emit('delete_channel',editingChannel._id,res=>{if(res.success){setShowChannelSettings(false);setChannels(p=>p.filter(x=>x._id!==editingChannel._id));setActiveChat(null);}});}}
