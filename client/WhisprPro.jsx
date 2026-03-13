@@ -168,8 +168,8 @@ function Modal({ onClose, children, wide }) {
 
 function IncomingCallOverlay({ from, fromDisplay, fromAvatar, onAccept, onReject }) {
   return (
-    <div className="fixed inset-0 flex items-center justify-center z-[200]" style={{background:'rgba(0,0,0,0.85)',backdropFilter:'blur(20px)',animation:'fadeIn 0.2s ease'}}>
-      <div className="rounded-3xl p-10 text-center w-80 shadow-2xl" style={{background:'#111116',border:'1px solid rgba(255,255,255,0.08)',animation:'slideUp 0.25s cubic-bezier(0.34,1.56,0.64,1)'}}>
+    <div className="fixed inset-0 flex items-center justify-center z-[200]" style={{background:'rgba(0,0,0,0.88)',backdropFilter:'blur(24px)',animation:'fadeIn 0.2s ease'}}>
+      <div className="rounded-3xl p-10 text-center w-80 shadow-2xl" style={{background:'rgba(14,14,20,0.98)',border:'1px solid rgba(255,255,255,0.09)',animation:'slideUp 0.3s cubic-bezier(0.34,1.4,0.64,1)'}}>
         <div className="mb-5 flex justify-center"><Avatar username={from} displayName={fromDisplay} avatar={fromAvatar} size="lg" /></div>
         <p className="text-white/30 text-[10px] tracking-[0.3em] uppercase mb-1">Входящий звонок</p>
         <p className="text-white text-2xl font-bold mb-8">{fromDisplay||from}</p>
@@ -240,13 +240,15 @@ export default function WhisprPro() {
   const [activeChat, setActiveChat] = useState(null);
   const [chatVisible, setChatVisible] = useState(false);
   const [messages, setMessages] = useState({});
-  const [inputMessage, setInputMessage] = useState('');
+  
   const [typingUsers, setTypingUsers] = useState({});
   const [avatars, setAvatars] = useState({});
 
   const [showSearch, setShowSearch] = useState(false);
+  const [text, setText] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [searchChannelResults, setSearchChannelResults] = useState([]);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupDesc, setNewGroupDesc] = useState('');
@@ -330,6 +332,7 @@ export default function WhisprPro() {
   const [editingChannel, setEditingChannel] = useState(null);
   const [channelSettingsForm, setChannelSettingsForm] = useState({});
   const [channelSearch, setChannelSearch] = useState('');
+  const [searchChannelResults, setSearchChannelResults] = useState([]);
   const [channelSearchResults, setChannelSearchResults] = useState([]);
   // История звонков
   const [callHistory, setCallHistory] = useState([]);
@@ -402,53 +405,60 @@ export default function WhisprPro() {
 
   const startCall = useCallback(async (toUsername, ct='audio') => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({audio:{
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        sampleRate: 48000,
-        channelCount: 1,
-      },video:false});
+      const isVideo = ct === 'video';
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true, sampleRate:48000, channelCount:1 },
+        video: isVideo ? { facingMode:'user', width:{ideal:640}, height:{ideal:480} } : false
+      });
       localStreamRef.current = stream;
+      // Показать локальное видео сразу
+      if (isVideo && localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+        localVideoRef.current.play().catch(()=>{});
+      }
+      setCallType(ct);
       const pc = new RTCPeerConnection(ICE);
       peerConnectionRef.current = pc;
-      stream.getTracks().forEach(t=>pc.addTrack(t,stream));
+      stream.getTracks().forEach(t => pc.addTrack(t, stream));
       pc.ontrack = e => {
-        console.log('📞 caller ontrack', e.track.kind, e.streams.length);
         const s = e.streams?.[0] || new MediaStream([e.track]);
         remoteStreamRef.current = s;
-        // Try audio element
-        const tryPlay = () => { const a=remoteAudioRef.current||document.getElementById('remoteAudio'); if(a){a.srcObject=s;a.play().catch(err=>console.warn('play err',err));} };
-        tryPlay(); setTimeout(tryPlay, 500); setTimeout(tryPlay, 1500);
+        // Аудио
+        const tryAudio = () => { const a=remoteAudioRef.current||document.getElementById('remoteAudio'); if(a){a.srcObject=s;a.play().catch(()=>{});} };
+        tryAudio(); setTimeout(tryAudio, 500);
+        // Видео
+        if (remoteVideoRef.current) { remoteVideoRef.current.srcObject=s; remoteVideoRef.current.play().catch(()=>{}); }
       };
       pc.onicecandidate = e => { if(e.candidate) socketRef.current?.emit('ice_candidate',{to:toUsername,candidate:e.candidate}); };
       pc.onconnectionstatechange = () => { if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); };
-      const offer = await pc.createOffer({offerToReceiveAudio:true});
+      const offer = await pc.createOffer({ offerToReceiveAudio:true, offerToReceiveVideo:isVideo });
       await pc.setLocalDescription(offer);
       socketRef.current?.emit('call_offer',{to:toUsername,offer,callType:ct});
       setCallPeer(toUsername); callPeerRef.current=toUsername; setCallState('calling');
-    } catch { alert('Нет доступа к микрофону'); cleanupCall(); }
+    } catch(e) { alert('Нет доступа к ' + (ct==='video'?'камере/микрофону':'микрофону') + ': ' + e.message); cleanupCall(); }
   }, [cleanupCall]);
 
   const acceptCall = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({audio:{
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        sampleRate: 48000,
-        channelCount: 1,
-      },video:false});
-      localStreamRef.current=stream;
+      const isVideo = callType === 'video';
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true, sampleRate:48000, channelCount:1 },
+        video: isVideo ? { facingMode:'user', width:{ideal:640}, height:{ideal:480} } : false
+      });
+      localStreamRef.current = stream;
+      if (isVideo && localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+        localVideoRef.current.play().catch(()=>{});
+      }
       const pc = new RTCPeerConnection(ICE);
-      peerConnectionRef.current=pc;
-      stream.getTracks().forEach(t=>pc.addTrack(t,stream));
+      peerConnectionRef.current = pc;
+      stream.getTracks().forEach(t => pc.addTrack(t, stream));
       pc.ontrack = e => {
-        console.log('📞 callee ontrack', e.track.kind, e.streams.length);
         const s = e.streams?.[0] || new MediaStream([e.track]);
         remoteStreamRef.current = s;
-        const tryPlay = () => { const a=remoteAudioRef.current||document.getElementById('remoteAudio'); if(a){a.srcObject=s;a.play().catch(err=>console.warn('play err',err));} };
-        tryPlay(); setTimeout(tryPlay, 500); setTimeout(tryPlay, 1500);
+        const tryAudio = () => { const a=remoteAudioRef.current||document.getElementById('remoteAudio'); if(a){a.srcObject=s;a.play().catch(()=>{});} };
+        tryAudio(); setTimeout(tryAudio, 500);
+        if (remoteVideoRef.current) { remoteVideoRef.current.srcObject=s; remoteVideoRef.current.play().catch(()=>{}); }
       };
       pc.onicecandidate = e => { if(e.candidate) socketRef.current?.emit('ice_candidate',{to:callPeerRef.current,candidate:e.candidate}); };
       pc.onconnectionstatechange = () => { if(['failed','disconnected','closed'].includes(pc.connectionState)) cleanupCall(); };
@@ -546,8 +556,11 @@ export default function WhisprPro() {
       setActiveChat(a => (a?.type==='channel'&&a.id===channelId) ? null : a);
     });
     s.on('incoming_call', ({from, offer, callType: ct='audio'}) => {
-      callPeerRef.current=from; incomingOfferRef.current=offer;
-      setCallPeer(from); setCallType(ct); setCallState('incoming');
+      callPeerRef.current = from;
+      incomingOfferRef.current = offer;
+      setCallPeer(from);
+      setCallType(ct);      // ← сохраняем тип ДО acceptCall
+      setCallState('incoming');
     });
     s.on('message_pinned', ({groupId, messageId, pinnedBy}) => {
       if (messageId) {
@@ -644,7 +657,16 @@ export default function WhisprPro() {
     });
   };
 
-  const handleSearch = q=>{setSearchQuery(q);if(q.length<2){setSearchResults([]);return;}socket.emit('search_users',q,res=>{if(res.success)setSearchResults(res.results);});};
+  const handleSearch = q => {
+    setSearchQuery(q);
+    if (q.length < 2) { setSearchResults([]); setSearchChannelResults([]); return; }
+    socket.emit('search_users', q, res => {
+      if (res.success) {
+        setSearchResults(res.results || []);
+        setSearchChannelResults(res.channels || []);
+      }
+    });
+  };
   const handleAddContact = u=>{socket.emit('add_contact',u,res=>{if(res.success){setContacts(p=>[...p,res.contact]);if(res.contact.avatar)setAvatars(p=>({...p,[res.contact.username]:res.contact.avatar}));setSearchResults([]);setSearchQuery('');setShowSearch(false);}});};
   const handleRemoveContact = u=>{if(!confirm(`Удалить ${u}?`))return;socket.emit('remove_contact',u,res=>{if(res.success){setContacts(p=>p.filter(c=>c.username!==u));if(activeChat?.id===u)setActiveChat(null);}});};
   const openDirectChat = c=>{
@@ -669,7 +691,18 @@ export default function WhisprPro() {
     // Загрузить закреплённое
     socket.emit('get_pinned_message', g._id, res=>{if(res.success&&res.message)setPinnedMessage(p=>({...p,[g._id]:res.message}));});
   };
-  const handleSendMessage = e=>{e.preventDefault();if(!inputMessage.trim()||!activeChat)return;if(activeChat.type==='direct')socket.emit('send_message',{to:activeChat.id,text:inputMessage.trim(),type:'text'},()=>{});else socket.emit('send_group_message',{groupId:activeChat.id,text:inputMessage.trim(),type:'text'},()=>{});setInputMessage('');};
+  const handleSendMessage = e => {
+    e.preventDefault();
+    const msg = (text||'').trim();
+    if (!msg || !activeChat) return;
+    const replyData = replyTo ? {replyToId:replyTo._id, replyFrom:replyTo.from, replyText:replyTo.type==='voice'?'🎤 Голосовое':replyTo.type==='video'?'📹 Видео':replyTo.text} : {};
+    if (activeChat.type==='direct') socket.emit('send_message', {to:activeChat.id, text:msg, type:'text', ...replyData}, ()=>{});
+    else if (activeChat.type==='group') socket.emit('send_group_message', {groupId:activeChat.id, text:msg, type:'text', ...replyData}, ()=>{});
+    else if (activeChat.type==='channel') socket.emit('send_channel_message', {channelId:activeChat.id, text:msg, type:'text'}, ()=>{});
+    setText(''); setReplyTo(null);
+    const key = getChatKey(activeChatRef.current);
+    if (key) { draftsRef.current[key]=''; setDrafts(p=>({...p,[key]:''})); }
+  };
   const handleTyping = ()=>{if(!activeChat)return;if(activeChat.type==='direct')socket.emit('typing',activeChat.id);else socket.emit('group_typing',activeChat.id);};
   const startEdit = msg=>{setEditingMsgId(msg._id||msg.id);setEditText(msg.text);setMsgMenu(null);};
   const submitEdit = e=>{e.preventDefault();if(!editText.trim())return;socket.emit('edit_message',{messageId:editingMsgId,newText:editText.trim()},res=>{if(res.success){setEditingMsgId(null);setEditText('');}});};
@@ -861,23 +894,19 @@ export default function WhisprPro() {
     if (linkPreviews[msgId]) return;
     const urlMatch = text.match(/https?:\/\/[^\s]+/);
     if (!urlMatch) return;
-    const url = urlMatch[0];
+    const url = urlMatch[0].replace(/[.,!?)]+$/, '');
     try {
-      setLinkPreviews(p=>({...p,[msgId]:{loading:true,url}}));
-      const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`);
+      setLinkPreviews(p => ({...p, [msgId]: {loading:true, url}}));
+      const res = await fetch(`${SERVER_URL}/api/link-preview?url=${encodeURIComponent(url)}`);
       const data = await res.json();
-      const html = data.contents||'';
-      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-      const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i) ||
-                        html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']description["']/i) ||
-                        html.match(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']+)["']/i);
-      const imgMatch  = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i);
-      const title = titleMatch?.[1]?.trim()?.slice(0,80);
-      const desc  = descMatch?.[1]?.trim()?.slice(0,120);
-      const image = imgMatch?.[1];
-      if (title) setLinkPreviews(p=>({...p,[msgId]:{url,title,desc,image,loading:false}}));
-      else setLinkPreviews(p=>({...p,[msgId]:{url,loading:false,failed:true}}));
-    } catch(e) { setLinkPreviews(p=>({...p,[msgId]:{loading:false,failed:true,url}})); }
+      if (data.error || !data.title) {
+        setLinkPreviews(p => ({...p, [msgId]: {loading:false, failed:true, url}}));
+      } else {
+        setLinkPreviews(p => ({...p, [msgId]: {url, title:data.title, desc:data.desc, image:data.image, loading:false}}));
+      }
+    } catch(e) {
+      setLinkPreviews(p => ({...p, [msgId]: {loading:false, failed:true, url}}));
+    }
   };
 
   const sendFile = (data, name, mimeType) => {
@@ -1038,8 +1067,9 @@ export default function WhisprPro() {
             <div key={c.username} onClick={()=>openDirectChat(c)}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-150 group`}
               style={{
-                background:activeChat?.type==='direct'&&activeChat.id===c.username?`linear-gradient(135deg,${T.a}22,${T.c}15)`:undefined,
-                border:activeChat?.type==='direct'&&activeChat.id===c.username?'1px solid rgba(255,255,255,0.07)':'1px solid transparent',
+                background:activeChat?.type==='direct'&&activeChat.id===c.username?`linear-gradient(135deg,${T.a}18,${T.b}10)`:'transparent',
+                border:activeChat?.type==='direct'&&activeChat.id===c.username?`1px solid ${T.a}30`:'1px solid transparent',
+                transform:'none',transition:'all 0.15s ease',
                 animation:`listItem 0.3s ease ${i*0.04}s both`,
               }}>
               <Avatar username={c.username} displayName={c.displayName} avatar={avatars[c.username]} size="sm" online={c.isOnline} />
@@ -1114,9 +1144,9 @@ export default function WhisprPro() {
               </div>
 
               {activeChat.type==='direct'&&callState==='idle'&&(<>
-                <button onClick={()=>startCall(activeChat.id,'audio')} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Аудио звонок"><Phone className="w-4 h-4 text-white/40 hover:text-green-400 transition-colors"/></button>
-                <button onClick={()=>startCall(activeChat.id,'video')} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Видео звонок"><Video className="w-4 h-4 text-white/40 hover:text-blue-400 transition-colors"/></button>
-                <button onClick={()=>{setShowCallHistory(true);loadCallHistory(activeChat.id);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="История звонков"><PhoneCall className="w-4 h-4 text-white/25 hover:text-white/50 transition-colors"/></button>
+                <button onClick={()=>startCall(activeChat.id,'audio')} className="p-2 rounded-xl transition-all duration-150 hover:bg-white/6 active:scale-90 flex-shrink-0" title="Аудио звонок"><Phone className="w-4 h-4 text-white/35 hover:text-green-400 transition-colors"/></button>
+                <button onClick={()=>startCall(activeChat.id,'video')} className="p-2 rounded-xl transition-all duration-150 hover:bg-white/6 active:scale-90 flex-shrink-0" title="Видео звонок"><Video className="w-4 h-4 text-white/35 hover:text-blue-400 transition-colors"/></button>
+                <button onClick={()=>{setShowCallHistory(true);loadCallHistory(activeChat.id);}} className="p-2 rounded-xl transition-all duration-150 hover:bg-white/6 active:scale-90 flex-shrink-0" title="История звонков"><PhoneCall className="w-4 h-4 text-white/20 hover:text-white/50 transition-colors"/></button>
               </>)}
               <button onClick={()=>{setShowMsgSearch(s=>!s);setMsgSearchQuery('');setMsgSearchResults([]);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Поиск по сообщениям"><Search className="w-4 h-4 text-white/30 hover:text-white/60 transition-colors"/></button>
               {activeChat.type==='group'&&<button onClick={()=>setShowGroupInfo(true)} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0"><Settings className="w-4 h-4 text-white/30"/></button>}
@@ -1178,9 +1208,9 @@ export default function WhisprPro() {
                 const dateLbl=msgDate.toDateString()===todayD.toDateString()?'Сегодня':msgDate.toDateString()===yesterdayD.toDateString()?'Вчера':msgDate.toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
                 return (
                   <React.Fragment key={mid}>
-                  {showDateSep&&<div className="flex justify-center my-3"><span className="px-3 py-1 rounded-full text-xs" style={{background:'rgba(255,255,255,0.06)',color:'rgba(255,255,255,0.3)'}}>{dateLbl}</span></div>}
+                  {showDateSep&&<div className="flex justify-center my-4" style={{animation:'fadeIn 0.3s ease'}}><span className="px-4 py-1.5 rounded-full text-xs font-medium" style={{background:'rgba(255,255,255,0.05)',color:'rgba(255,255,255,0.25)',backdropFilter:'blur(8px)',border:'1px solid rgba(255,255,255,0.06)'}}>{dateLbl}</span></div>}
                   <div className={`flex items-end gap-2 ${isOwn?'flex-row-reverse':'flex-row'}`}
-                    style={{animation:isOwn&&idx===chatMessages.length-1?'sendBubble 0.35s cubic-bezier(0.34,1.56,0.64,1) both':`msgIn 0.2s ease ${Math.min(idx,20)*0.015}s both`}}
+                    style={{animation:isOwn&&idx===chatMessages.length-1?'sendBubble 0.38s cubic-bezier(0.34,1.4,0.64,1) both':`msgIn 0.18s cubic-bezier(0.25,0.46,0.45,0.94) ${Math.min(idx,15)*0.012}s both`}}
                     onMouseEnter={()=>{clearTimeout(hoverTimeoutRef.current);setHoveredMsg(mid);}}
                     onMouseLeave={()=>{hoverTimeoutRef.current=setTimeout(()=>setHoveredMsg(null),300);}}>
                     {!isOwn&&activeChat.type==='group'&&<div className="cursor-pointer hover:opacity-80 transition-opacity" onClick={()=>handleViewProfile(msg.from)}><Avatar username={msg.from} displayName={msg.from} avatar={avatars[msg.from]} size="sm"/></div>}
@@ -1188,7 +1218,7 @@ export default function WhisprPro() {
                       {!isOwn&&activeChat.type==='group'&&<div className="text-xs text-white/25 mb-1 ml-1">{contacts.find(c=>c.username===msg.from)?.displayName||msg.from}</div>}
                       {hoveredMsg===mid&&!isEditing&&(
                         <div className={`absolute ${isOwn?'right-0':'left-0'} -top-9 flex gap-0.5 rounded-xl px-1.5 py-1 z-10 shadow-xl`}
-                          style={{background:'rgba(8,8,14,0.97)',border:'1px solid rgba(255,255,255,0.07)',animation:'popIn 0.15s cubic-bezier(0.34,1.56,0.64,1)'}}
+                          style={{background:'rgba(10,10,16,0.97)',border:'1px solid rgba(255,255,255,0.08)',animation:'popIn 0.18s cubic-bezier(0.34,1.8,0.64,1)',backdropFilter:'blur(12px)'}}
                           onMouseEnter={()=>{clearTimeout(hoverTimeoutRef.current);setHoveredMsg(mid);}}
                           onMouseLeave={()=>{hoverTimeoutRef.current=setTimeout(()=>setHoveredMsg(null),300);}}>
                           {EMOJI_LIST.map(e=><button key={e} onClick={()=>handleReaction(mid,e)} className="text-base hover:scale-125 transition-transform px-0.5">{e}</button>)}
@@ -1203,8 +1233,10 @@ export default function WhisprPro() {
                           <button type="button" onClick={()=>setEditingMsgId(null)} className="p-2 rounded-lg" style={{background:'rgba(255,255,255,0.05)'}}><X className="w-4 h-4 text-white/40"/></button>
                         </form>
                       ):(
-                        <div className={`rounded-2xl px-4 py-2.5 ${isOwn?'rounded-br-sm':'rounded-bl-sm'} transition-all`}
-                          style={isOwn?{background:`linear-gradient(135deg,${T.a}cc,${T.b}cc)`,border:'1px solid rgba(255,255,255,0.08)'}:{background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.05)'}}>
+                        <div className={`rounded-2xl px-4 py-2.5 ${isOwn?'rounded-br-sm':'rounded-bl-sm'}`}
+                          style={isOwn
+                            ?{background:`linear-gradient(135deg,${T.a},${T.b})`,border:'none',boxShadow:`0 3px 18px ${T.a}35`,transition:'box-shadow 0.2s'}
+                            :{background:'rgba(255,255,255,0.066)',border:'1px solid rgba(255,255,255,0.075)',boxShadow:'0 2px 8px rgba(0,0,0,0.28)',transition:'background 0.2s'}}>
                           {msg.replyFrom&&(
                             <div className="mb-1.5 px-2.5 py-1.5 rounded-lg text-xs" style={{background:'rgba(255,255,255,0.07)',borderLeft:`2px solid ${T.a}`}}>
                               <div className="font-semibold mb-0.5" style={{color:T.a}}>{msg.replyFrom}</div>
@@ -1382,9 +1414,22 @@ export default function WhisprPro() {
                 </div>
               ):(
                 <form onSubmit={handleSendMessage} className="flex gap-2">
-                  <input type="text" value={inputMessage} onChange={e=>{setInputMessage(e.target.value);handleTyping();}}
+                  <input type="text" value={text||''} 
+                    onChange={e=>{
+                      const val=e.target.value; setText(val); handleTyping();
+                      // Автосохранение черновика
+                      const key=getChatKey(activeChatRef.current);
+                      if(key){draftsRef.current[key]=val;setDrafts(p=>({...p,[key]:val}));}
+                      // Mention autocomplete
+                      const atIdx=val.lastIndexOf('@');
+                      if(atIdx>=0){const q=val.slice(atIdx+1).toLowerCase();const chat=activeChatRef.current;
+                        if(chat?.type==='group'){const grp=groups.find(g=>g._id===chat.id);const m=(grp?.members||[]).filter(x=>x.toLowerCase().includes(q)&&x!==currentUser?.username).slice(0,5);setMentionList(m);}
+                        else setMentionList([]);}else setMentionList([]);
+                    }}
                     className="flex-1 px-4 py-3 rounded-2xl text-white/90 text-sm outline-none placeholder-white/15 min-w-0 transition-all"
-                    style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)'}}
+                    style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)',transition:'border-color 0.15s,background 0.15s'}}
+                    onFocus={e=>{e.target.style.borderColor='rgba(255,255,255,0.18)';e.target.style.background='rgba(255,255,255,0.07)';}}
+                    onBlur={e=>{e.target.style.borderColor='rgba(255,255,255,0.06)';e.target.style.background='rgba(255,255,255,0.04)';}}
                     placeholder="Напишите сообщение..."/>
                   <input ref={fileInputRef} type="file" accept="image/*,video/*,.pdf,.doc,.docx,.txt,.zip" className="hidden" onChange={handleFileSelect}/>
                   <button type="button" onClick={()=>fileInputRef.current?.click()} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Прикрепить файл"><Paperclip className="w-5 h-5 text-white/25"/></button>
@@ -1536,7 +1581,7 @@ export default function WhisprPro() {
         <Modal onClose={()=>setShowSearch(false)}>
           <div className="p-6">
             <div className="flex items-center justify-between mb-4"><h3 className="text-white/70 font-semibold">Поиск</h3><button onClick={()=>setShowSearch(false)} className="p-1.5 rounded-lg hover:bg-white/5"><X className="w-4 h-4 text-white/30"/></button></div>
-            <input type="text" value={searchQuery} onChange={e=>handleSearch(e.target.value)} autoFocus className="w-full px-4 py-3 rounded-xl text-white/80 text-sm outline-none placeholder-white/20 mb-4" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.07)'}} placeholder="Username или имя..."/>
+            <input type="text" value={searchQuery} onChange={e=>handleSearch(e.target.value)} autoFocus className="w-full px-4 py-3 rounded-xl text-white/80 text-sm outline-none placeholder-white/20 mb-4" style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.07)'}} placeholder="Люди, каналы, группы..."/>
             <div className="space-y-1.5 max-h-72 overflow-y-auto">
               {searchResults.map(u=>(
                 <div key={u.username} className="flex items-center gap-3 px-4 py-2.5 rounded-xl" style={{background:'rgba(255,255,255,0.03)'}}>
@@ -1545,7 +1590,36 @@ export default function WhisprPro() {
                   <button onClick={()=>handleAddContact(u.username)} className="px-3 py-1.5 rounded-lg text-white/50 text-xs flex items-center gap-1.5 hover:bg-white/8 transition-colors" style={{background:'rgba(255,255,255,0.05)'}}><UserPlus className="w-3.5 h-3.5"/>Добавить</button>
                 </div>
               ))}
-              {searchQuery.length>=2&&searchResults.length===0&&<p className="text-center py-8 text-white/20 text-sm">Ничего не найдено</p>}
+              {searchChannelResults.length>0&&(
+                <div className="mt-3">
+                  <p className="text-[10px] font-semibold text-white/20 uppercase tracking-widest px-1 pb-2 flex items-center gap-1.5"><Radio className="w-3 h-3"/>Каналы</p>
+                  {searchChannelResults.map(ch=>(
+                    <div key={ch._id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all hover:bg-white/4"
+                      onClick={()=>{
+                        if (ch.isSubscribed) {
+                          const existing = channels.find(x=>x._id===ch._id)||{...ch,subscribers:[],members:[]};
+                          openChannelChat(existing); setShowSearch(false);
+                        } else {
+                          socket.emit('subscribe_channel', ch._id, res => {
+                            if (res.success) { setChannels(p=>[...p,res.channel]); openChannelChat(res.channel); setShowSearch(false); }
+                          });
+                        }
+                      }}>
+                      <div className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
+                        {ch.avatar?<img src={ch.avatar} className="w-full h-full rounded-full object-cover" alt=""/>:<Radio className="w-4 h-4 text-white"/>}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-white/70 truncate">{ch.name}{ch.username&&<span className="ml-1 text-white/30 font-normal text-xs">@{ch.username}</span>}</div>
+                        <div className="text-xs text-white/25">{ch.subscriberCount} подп.</div>
+                      </div>
+                      <span className="text-xs px-2.5 py-1 rounded-lg flex-shrink-0 font-medium" style={{background:ch.isSubscribed?'rgba(255,255,255,0.05)':'rgba(99,102,241,0.15)',color:ch.isSubscribed?'rgba(255,255,255,0.3)':'rgba(167,139,250,1)'}}>
+                        {ch.isSubscribed?'Открыть':'+ Подписаться'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {searchQuery.length>=2&&searchResults.length===0&&searchChannelResults.length===0&&<p className="text-center py-8 text-white/20 text-sm">Ничего не найдено</p>}
               {searchQuery.length<2&&<p className="text-center py-8 text-white/20 text-sm">Введите минимум 2 символа</p>}
             </div>
           </div>
@@ -1756,19 +1830,7 @@ export default function WhisprPro() {
                 <input type="checkbox" checked={channelSettingsForm.isPrivate||false} onChange={e=>setChannelSettingsForm(p=>({...p,isPrivate:e.target.checked}))} className="w-4 h-4 accent-violet-500"/>
                 <div><div className="text-white/60 text-sm">🔒 Приватный канал</div><div className="text-white/25 text-xs">Скрыт из поиска, доступ только по ссылке</div></div>
               </label>
-              {/* Ссылка приглашения */}
-              <div className="px-3 py-3 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.05)'}}>
-                <div className="text-white/25 text-xs mb-1.5">🔗 Ссылка на канал</div>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 text-white/50 text-xs font-mono truncate px-2 py-1.5 rounded-lg" style={{background:'rgba(0,0,0,0.3)'}}>
-                    {`${window.location.origin}?channel=${editingChannel._id}`}
-                  </div>
-                  <button type="button" onClick={()=>{navigator.clipboard.writeText(`${window.location.origin}?channel=${editingChannel._id}`).then(()=>alert('Скопировано!'));}}
-                    className="px-3 py-1.5 rounded-lg text-xs text-white/50 hover:bg-white/10 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.08)'}}>
-                    Копировать
-                  </button>
-                </div>
-              </div>
+
               <button type="submit" className="w-full py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 transition-opacity" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>💾 Сохранить</button>
               <button type="button" onClick={()=>{if(confirm('Удалить канал навсегда?'))socket.emit('delete_channel',editingChannel._id,res=>{if(res.success){setShowChannelSettings(false);setChannels(p=>p.filter(x=>x._id!==editingChannel._id));setActiveChat(null);}});}}
                 className="w-full py-2.5 rounded-xl text-red-400/70 text-sm hover:bg-red-500/8 transition-colors" style={{border:'1px solid rgba(239,68,68,0.15)'}}>🗑 Удалить канал</button>
@@ -1830,13 +1892,19 @@ export default function WhisprPro() {
 
 const CSS = `
   @keyframes spin { to{transform:rotate(360deg)} }
+  ::-webkit-scrollbar{width:3px;height:3px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.09);border-radius:99px}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.18)}
+  *{-webkit-tap-highlight-color:transparent}
   @keyframes fadeIn { from{opacity:0} to{opacity:1} }
   @keyframes slideUp { from{opacity:0;transform:translateY(20px) scale(0.97)} to{opacity:1;transform:translateY(0) scale(1)} }
   @keyframes logoEntrance { from{opacity:0;transform:translateY(-16px) scale(0.92)} to{opacity:1;transform:translateY(0) scale(1)} }
   @keyframes popIn { from{opacity:0;transform:scale(0.88)} to{opacity:1;transform:scale(1)} }
   @keyframes listItem { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
-  @keyframes msgIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
-  @keyframes sendBubble { 0%{opacity:0;transform:translateY(12px) scale(0.9)} 60%{transform:translateY(-3px) scale(1.02)} 100%{opacity:1;transform:translateY(0) scale(1)} }
-  ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:4px}
+  @keyframes msgIn { from{opacity:0;transform:translateY(7px) scale(0.96)} to{opacity:1;transform:translateY(0) scale(1)} }
+  @keyframes sendBubble { 0%{opacity:0;transform:translateY(16px) scale(0.85)} 50%{transform:translateY(-5px) scale(1.04)} 75%{transform:translateY(2px) scale(0.98)} 100%{opacity:1;transform:translateY(0) scale(1)} }
+  @keyframes pulse-soft { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
   input::placeholder{transition:opacity 0.2s} input:focus::placeholder{opacity:0.4}
 `;

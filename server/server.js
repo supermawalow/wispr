@@ -69,7 +69,8 @@ const messageSchema = new mongoose.Schema({
   replyFrom:     { type: String, default: null },
   replyText:     { type: String, default: null },
   fileName:      { type: String, default: null },
-  fileMime:      { type: String, default: null }
+  fileMime:      { type: String, default: null },
+  linkPreview:   { type: Object, default: null } // {url,title,desc,image}
 });
 
 const adminLogSchema = new mongoose.Schema({
@@ -168,8 +169,9 @@ io.on('connection', (socket) => {
 
       const contactDocs = await User.find({ username: { $in: user.contacts } });
       const contacts = contactDocs.map(c => ({
-        username: c.username, displayName: c.displayName, bio: c.bio||'', status: c.hideOnline?'hidden':(userSockets.has(c.username)?(c.status||'online'):'offline'),
-        avatar: c.avatar, isOnline: userSockets.has(c.username), isBlocked: c.isBlocked
+        username: c.username, displayName: c.displayName, bio: c.bio||'',
+        avatar: c.avatar, isOnline: userSockets.has(c.username), isBlocked: c.isBlocked,
+        isBlockedByMe: (user.blockedUsers||[]).includes(c.username)
       }));
 
       // Группы пользователя
@@ -190,14 +192,30 @@ io.on('connection', (socket) => {
     const me = onlineUsers.get(socket.id);
     if (!me) return cb({ success: false, error: 'Не авторизован' });
     try {
-      const results = await User.find({
-        username: { $ne: me },
-        $or: [{ username: { $regex: query, $options: 'i' } }, { displayName: { $regex: query, $options: 'i' } }]
-      }).limit(20);
-      cb({ success: true, results: results.map(u => ({
-        username: u.username, displayName: u.displayName, bio: u.bio||'', status: u.hideOnline?'hidden':(userSockets.has(u.username)?(u.status||'online'):'offline'),
-        avatar: u.avatar, isOnline: userSockets.has(u.username), isBlocked: u.isBlocked
-      }))});
+      const [results, channels] = await Promise.all([
+        User.find({
+          username: { $ne: me },
+          $or: [{ username: { $regex: query, $options: 'i' } }, { displayName: { $regex: query, $options: 'i' } }]
+        }).limit(15),
+        Channel.find({
+          $or: [
+            { name: { $regex: query, $options: 'i' } },
+            { username: { $regex: query, $options: 'i' } }
+          ]
+        }).limit(10)
+      ]);
+      cb({ success: true,
+        results: results.map(u => ({
+          username: u.username, displayName: u.displayName, bio: u.bio||'',
+          avatar: u.avatar, isOnline: userSockets.has(u.username), isBlocked: u.isBlocked
+        })),
+        channels: channels.map(ch => ({
+          _id: ch._id, name: ch.name, username: ch.username,
+          description: ch.description, avatar: ch.avatar,
+          isPrivate: ch.isPrivate, subscriberCount: ch.subscribers.length,
+          isSubscribed: ch.subscribers.includes(me)
+        }))
+      });
     } catch (e) { cb({ success: false, error: 'Ошибка поиска' }); }
   });
 
@@ -261,6 +279,11 @@ io.on('connection', (socket) => {
     if (!me) return cb({ success: false, error: 'Не авторизован' });
     try {
       const { to, text, type, audioData, replyToId, replyFrom, replyText } = data;
+      // Проверить блокировку
+      const meUser = await User.findOne({ username: me });
+      if (meUser?.blockedUsers?.includes(to.toLowerCase())) return cb({ success: false, error: 'Вы заблокировали этого пользователя' });
+      const toUser = await User.findOne({ username: to.toLowerCase() });
+      if (toUser?.blockedUsers?.includes(me)) return cb({ success: false, error: 'Вы заблокированы этим пользователем' });
       const recipientSocket = userSockets.get(to.toLowerCase());
       const msg = await Message.create({
         chatId: getChatId(me, to.toLowerCase()), chatType: 'direct',
@@ -495,9 +518,7 @@ io.on('connection', (socket) => {
         // Обновляем сообщения
         await Message.updateMany({ from: oldUsername }, { from: nu });
         await Message.updateMany({ to: oldUsername }, { to: nu });
-        await Message.updateMany({}, { $set: { chatId: undefined } }); // пересчитаем ниже
-
-        // Пересчёт chatId для всех личных сообщений
+        // Пересчитываем chatId ТОЛЬКО для сообщений этого пользователя
         const msgs = await Message.find({ chatType: 'direct', $or: [{ from: nu }, { to: nu }] });
         for (const msg of msgs) {
           msg.chatId = [msg.from, msg.to].sort().join('_');
@@ -1077,6 +1098,34 @@ app.get('/health', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3001;
+// Link preview proxy endpoint
+const https_mod = require('https');
+const http_mod  = require('http');
+app.get('/api/link-preview', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.json({ error: 'no url' });
+  try {
+    const mod = url.startsWith('https') ? https_mod : http_mod;
+    const data = await new Promise((resolve, reject) => {
+      const reqH = mod.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WhisprBot/1.0)' }, timeout: 5000 }, r => {
+        let body = '';
+        r.setEncoding('utf8');
+        r.on('data', d => { if (body.length < 80000) body += d; });
+        r.on('end', () => resolve(body));
+      });
+      reqH.on('error', reject);
+      reqH.on('timeout', () => { reqH.destroy(); reject(new Error('timeout')); });
+    });
+    const title = (data.match(/<title[^>]*>([^<]{1,100})<\/title>/i)||[])[1]?.trim();
+    const desc  = (data.match(/<meta[^>]*(?:name|property)=["'](?:description|og:description)["'][^>]*content=["']([^"']{1,200})["']/i)||
+                   data.match(/<meta[^>]*content=["']([^"']{1,200})["'][^>]*(?:name|property)=["'](?:description|og:description)["']/i)||[])[1]?.trim();
+    const image = (data.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)||
+                   data.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i)||[])[1];
+    if (!title) return res.json({ error: 'no title' });
+    res.json({ url, title, desc: desc||'', image: image||null });
+  } catch(e) { res.json({ error: e.message }); }
+});
+
 server.listen(PORT, () => console.log(`🚀 Whispr Server v3 on port ${PORT}`));
 process.on('SIGTERM', () => server.close(() => process.exit(0)));
 
