@@ -94,7 +94,9 @@ function WhisprLogo({ size = 'xl', theme }) {
 function VerifiedBadge({ size = 'sm', gold = false }) {
   const s = size === 'lg' ? 16 : size === 'md' ? 13 : 11;
   return (
-    <svg width={s} height={s} viewBox="0 0 20 20" fill="none" style={{flexShrink:0,display:'inline-block',verticalAlign:'middle'}}>
+    <svg width={s} height={s} viewBox="0 0 20 20" fill="none"
+      style={{flexShrink:0,display:'inline-block',verticalAlign:'middle',cursor:'default'}}
+      title="Верифицированный аккаунт">
       <circle cx="10" cy="10" r="10" fill={gold ? '#f59e0b' : '#3b82f6'}/>
       <path d="M6 10l2.5 2.5L14 7" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
@@ -565,6 +567,29 @@ export default function WhisprPro() {
   useEffect(() => {
     const s = io(SERVER_URL,{transports:['websocket','polling']});
     setSocket(s); socketRef.current=s;
+
+    // Авто-релогин при реконнекте (сервер мог перезапуститься)
+    s.on('connect', () => {
+      try {
+        const saved = localStorage.getItem('whispr_creds');
+        if (!saved) return;
+        const {u, p} = JSON.parse(saved);
+        if (!u || !p) return;
+        s.emit('login', {username: u, password: p}, res => {
+          if (res.success) {
+            setCurrentUser(res.user);
+            setContacts(res.contacts||[]);
+            setGroups(res.groups||[]);
+            setChannels(res.channels||[]);
+            setIsAuthenticated(true);
+            const av = {};
+            (res.contacts||[]).forEach(c => { if(c.avatar) av[c.username]=c.avatar; });
+            if (res.user.avatar) av[res.user.username] = res.user.avatar;
+            setAvatars(av);
+          }
+        });
+      } catch(e) { /* ignore */ }
+    });
     s.on('new_message', msg => {
       const me = currentUserRef.current?.username;
       const key = msg.from === me ? msg.to : msg.from;
@@ -851,10 +876,12 @@ export default function WhisprPro() {
   const searchAddMember = q=>{setAddMemberQuery(q);if(q.length<2){setAddMemberResults([]);return;}socket.emit('search_users',q,res=>{if(res.success)setAddMemberResults(res.results);});};
   const handleAddMember = u=>{socket.emit('group_add_member',{groupId:activeChat.id,username:u},res=>{if(res.success){setGroups(p=>p.map(g=>g._id===activeChat.id?res.group:g));setActiveChat(p=>p?{...p,data:res.group}:p);setAddMemberQuery('');setAddMemberResults([]);}else alert(res.error);});};
   const loadAdminData = (search='')=>{
-    socket.emit('admin_get_stats',res=>{if(res.success)setAdminStats(res.stats);});
-    socket.emit('admin_get_users',{search},res=>{if(res.success)setAllUsers(res.users);});
-    socket.emit('admin_get_logs',res=>{if(res.success)setAdminLogs(res.logs);});
-    socket.emit('admin_get_channels',res=>{if(res.success)setAdminChannels(res.channels||[]);});
+    const s = socketRef.current;
+    if (!s) return;
+    s.emit('admin_get_stats', res=>{if(res.success)setAdminStats(res.stats);});
+    s.emit('admin_get_users', {search}, res=>{if(res.success)setAllUsers(res.users);});
+    s.emit('admin_get_logs', res=>{if(res.success)setAdminLogs(res.logs);});
+    s.emit('admin_get_channels', res=>{if(res.success)setAdminChannels(res.channels||[]);});
   };
   const handlePromote = u=>{if(!confirm(`Сделать ${u} администратором?`))return;socket.emit('admin_promote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
   const handleDemote = u=>{if(!confirm(`Разжаловать ${u}?`))return;socket.emit('admin_demote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
@@ -2388,7 +2415,7 @@ export default function WhisprPro() {
         </div>
       )}
 
-      <div style={{position:'fixed',bottom:8,left:'50%',transform:'translateX(-50%)',color:'rgba(255,255,255,0.07)',fontSize:'10px',pointerEvents:'none',letterSpacing:'0.15em',zIndex:100}}>by project maw</div>
+      <div style={{position:'fixed',bottom:10,left:'50%',transform:'translateX(-50%)',color:'rgba(255,255,255,0.12)',fontSize:'10px',pointerEvents:'none',letterSpacing:'0.2em',zIndex:9999,fontFamily:'monospace',whiteSpace:'nowrap'}}>by project maw</div>
       <style>{CSS}</style>
     </div>
   );

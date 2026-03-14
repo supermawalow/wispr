@@ -146,6 +146,17 @@ async function logAdminAction(admin, action, target, details) {
 io.on('connection', (socket) => {
   console.log('🟢 Подключение:', socket.id);
 
+  // Хелпер: проверить авторизацию и уведомить клиент если сессия протухла
+  const requireAuth = (cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) {
+      socket.emit('session_expired');
+      if (typeof cb === 'function') cb({ success: false, error: 'Не авторизован' });
+      return null;
+    }
+    return me;
+  };
+
   // ── РЕГИСТРАЦИЯ ──
   socket.on('register', async (data, cb) => {
     try {
@@ -195,8 +206,7 @@ io.on('connection', (socket) => {
 
   // ── ПОИСК ──
   socket.on('search_users', async (query, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const [results, channels] = await Promise.all([
         User.find({
@@ -227,8 +237,7 @@ io.on('connection', (socket) => {
 
   // ── КОНТАКТЫ ──
   socket.on('add_contact', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       const targetUser = await User.findOne({ username: target.toLowerCase() });
@@ -244,8 +253,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('remove_contact', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       await User.updateOne({ username: me }, { $pull: { contacts: target.toLowerCase() } });
       cb({ success: true });
@@ -254,8 +262,7 @@ io.on('connection', (socket) => {
 
   // ── ЛИЧНЫЙ ЧАТ ──
   socket.on('load_chat', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const chatId = getChatId(me, target.toLowerCase());
       const msgs = await Message.find({ chatId, chatType: 'direct' })
@@ -281,8 +288,7 @@ io.on('connection', (socket) => {
 
   // ── ОТПРАВИТЬ СООБЩЕНИЕ (личное) ──
   socket.on('send_message', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) { socket.emit('session_expired'); return cb({ success: false, error: 'Не авторизован' }); }
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { to, text, type, audioData, replyToId, replyFrom, replyText } = data;
       const meUser = await User.findOne({ username: me });
@@ -311,8 +317,7 @@ io.on('connection', (socket) => {
 
   // Создать группу
   socket.on('create_group', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { name, description, members } = data;
       if (!name?.trim()) return cb({ success: false, error: 'Название обязательно' });
@@ -332,8 +337,7 @@ io.on('connection', (socket) => {
 
   // Загрузить сообщения группы
   socket.on('load_group_chat', async (groupId, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const group = await Group.findById(groupId);
       if (!group) return cb({ success: false, error: 'Группа не найдена' });
@@ -346,8 +350,7 @@ io.on('connection', (socket) => {
 
   // Отправить в группу
   socket.on('send_group_message', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { groupId, text, type, audioData, replyToId, replyFrom, replyText } = data;
       const group = await Group.findById(groupId);
@@ -370,8 +373,7 @@ io.on('connection', (socket) => {
   });
 
   // Добавить участника в группу
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { groupId, username } = data;
       const group = await Group.findById(groupId);
@@ -389,8 +391,7 @@ io.on('connection', (socket) => {
 
   // Покинуть группу
   socket.on('leave_group', async (groupId, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const group = await Group.findById(groupId);
       if (!group) return cb({ success: false, error: 'Группа не найдена' });
@@ -405,8 +406,7 @@ io.on('connection', (socket) => {
 
   // Обновить инфо группы
   socket.on('update_group', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { groupId, name, description, avatar } = data;
       const group = await Group.findById(groupId);
@@ -426,8 +426,7 @@ io.on('connection', (socket) => {
 
   // ── РЕАКЦИИ ──
   socket.on('add_reaction', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { messageId, emoji } = data;
       const msg = await Message.findById(messageId);
@@ -463,15 +462,13 @@ io.on('connection', (socket) => {
 
   // ── ПЕЧАТАЕТ ──
   socket.on('typing', (target) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return;
+    const me = requireAuth(cb); if (!me) return;
     const s = userSockets.get(target.toLowerCase());
     if (s) io.to(s).emit('user_typing', { from: me });
   });
 
   socket.on('group_typing', async (groupId) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return;
+    const me = requireAuth(cb); if (!me) return;
     try {
       const group = await Group.findById(groupId);
       if (!group) return;
@@ -485,8 +482,7 @@ io.on('connection', (socket) => {
 
   // ── АВАТАР ──
   socket.on('update_avatar', async (avatarData, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       await User.updateOne({ username: me }, { avatar: avatarData });
       io.emit('avatar_updated', { username: me, avatar: avatarData });
@@ -496,8 +492,7 @@ io.on('connection', (socket) => {
 
   // ── ОБНОВИТЬ ПРОФИЛЬ (ник, юзернейм, аватар) ──
   socket.on('update_profile', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { displayName, newUsername, avatar, bio, hideOnline, status } = data;
       const user = await User.findOne({ username: me });
@@ -558,8 +553,7 @@ io.on('connection', (socket) => {
 
   // ── ОБНОВИТЬ СТАТУС ──
   socket.on('set_status', async (status, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb && cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     const allowed = ['online','away','dnd'];
     if (!allowed.includes(status)) return cb && cb({ success: false, error: 'Неверный статус' });
     try {
@@ -581,8 +575,7 @@ io.on('connection', (socket) => {
 
   // ── СКРЫТЬ ОНЛАЙН / ПОКАЗАТЬ ──
   socket.on('set_hide_online', async (hide, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb && cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     try {
       await User.updateOne({ username: me }, { hideOnline: hide });
       // Если скрываем — сказать всем что оффлайн, если показываем — онлайн
@@ -599,8 +592,7 @@ io.on('connection', (socket) => {
 
   // ── ЗАБЛОКИРОВАТЬ / РАЗБЛОКИРОВАТЬ ПОЛЬЗОВАТЕЛЯ (личная блокировка) ──
   socket.on('block_user', async ({ target, block }, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     try {
       if (block) {
         await User.updateOne({ username: me }, { $addToSet: { blockedUsers: target } });
@@ -613,8 +605,7 @@ io.on('connection', (socket) => {
 
   // ── ПОЛУЧИТЬ ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ ──
   socket.on('get_user_profile', async (username, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: username.toLowerCase() });
       if (!user) return cb({ success: false, error: 'Не найден' });
@@ -633,8 +624,7 @@ io.on('connection', (socket) => {
 
   // ── ПОИСК ПО СООБЩЕНИЯМ В ЧАТЕ ──
   socket.on('search_messages', async ({ chatKey, query }, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me || !query || query.length < 2) return cb({ success: false, results: [] });
+    const me = requireAuth(cb); if (!me || !query || query.length < 2) return cb({ success: false, results: [] });
     try {
       let filter = { text: { $regex: query, $options: 'i' }, type: 'text' };
       if (chatKey.startsWith('group_')) {
@@ -651,8 +641,7 @@ io.on('connection', (socket) => {
 
   // ── ЗАКРЕПИТЬ СООБЩЕНИЕ В ГРУППЕ ──
   socket.on('pin_message', async ({ groupId, messageId }, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const group = await Group.findById(groupId);
       if (!group) return cb({ success: false, error: 'Группа не найдена' });
@@ -684,8 +673,7 @@ io.on('connection', (socket) => {
   // ══════════════════════════════════════════
   socket.on('create_channel', async (data, cb) => {
     console.log('create_channel called by', onlineUsers.get(socket.id), data?.name);
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { name, username, description } = data;
       if (!name?.trim()) return cb({ success: false, error: 'Нужно название' });
@@ -719,8 +707,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('subscribe_channel', async (channelId, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const ch = await Channel.findByIdAndUpdate(channelId, { $addToSet: { subscribers: me } }, { new: true });
       if (!ch) return cb({ success: false, error: 'Канал не найден' });
@@ -729,8 +716,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('unsubscribe_channel', async (channelId, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     try {
       await Channel.findByIdAndUpdate(channelId, { $pull: { subscribers: me } });
       cb({ success: true });
@@ -738,8 +724,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('update_channel', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { channelId, name, username, description, avatar } = data;
       const ch = await Channel.findById(channelId);
@@ -765,8 +750,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('send_channel_message', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { channelId, text, type, audioData, videoData } = data;
       const ch = await Channel.findById(channelId);
@@ -786,8 +770,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('load_channel_chat', async (channelId, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const msgs = await Message.find({ chatId: `channel_${channelId}`, chatType: 'channel' }).sort({ timestamp: 1 }).limit(100);
       cb({ success: true, messages: msgs });
@@ -795,8 +778,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('delete_channel', async (channelId, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const ch = await Channel.findById(channelId);
       if (!ch || ch.owner !== me) return cb({ success: false, error: 'Нет прав' });
@@ -814,8 +796,7 @@ io.on('connection', (socket) => {
   //  АДМИН
   // ══════════════════════════════════════════
   socket.on('admin_get_stats', async (cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -833,8 +814,7 @@ io.on('connection', (socket) => {
 
   socket.on('admin_get_users', async (data, cb) => {
     if (typeof data === 'function') { cb = data; data = {}; }
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -852,8 +832,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin_get_logs', async (cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -863,8 +842,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin_delete_user', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -878,8 +856,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin_block_user', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -896,8 +873,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin_promote_user', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -909,8 +885,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin_demote_user', async (target, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -924,8 +899,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin_verify_user', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -937,8 +911,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin_get_channels', async (cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -952,8 +925,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin_block_channel', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -966,8 +938,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('admin_verify_channel', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
@@ -982,8 +953,7 @@ io.on('connection', (socket) => {
 
   // ── РЕДАКТИРОВАТЬ СООБЩЕНИЕ ──
   socket.on('edit_message', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { messageId, newText } = data;
       const msg = await Message.findById(messageId);
@@ -1008,8 +978,7 @@ io.on('connection', (socket) => {
 
   // ── УДАЛИТЬ СООБЩЕНИЕ ──
   socket.on('delete_message', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { messageId, deleteFor } = data; // deleteFor: 'me' | 'all'
       const msg = await Message.findById(messageId);
@@ -1035,8 +1004,7 @@ io.on('connection', (socket) => {
 
   // ── ПЕРЕСЛАТЬ СООБЩЕНИЕ ──
   socket.on('forward_message', async (data, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const { messageId, toUsername } = data;
       const original = await Message.findById(messageId);
@@ -1061,8 +1029,7 @@ io.on('connection', (socket) => {
 
   // Инициатор -> вызываемый
   socket.on('call_offer', async (data) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return;
+    const me = requireAuth(cb); if (!me) return;
     const { to, offer, callType = 'audio' } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) {
@@ -1076,8 +1043,7 @@ io.on('connection', (socket) => {
 
   // Вызываемый принял -> отправляем answer инициатору
   socket.on('call_answer', (data) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return;
+    const me = requireAuth(cb); if (!me) return;
     const { to, answer } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) io.to(s).emit('call_answered', { from: me, answer });
@@ -1085,8 +1051,7 @@ io.on('connection', (socket) => {
 
   // ICE кандидаты
   socket.on('ice_candidate', (data) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return;
+    const me = requireAuth(cb); if (!me) return;
     const { to, candidate } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) io.to(s).emit('ice_candidate', { from: me, candidate });
@@ -1094,8 +1059,7 @@ io.on('connection', (socket) => {
 
   // Завершить звонок
   socket.on('call_end', async (data) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return;
+    const me = requireAuth(cb); if (!me) return;
     const { to, duration = 0, callType = 'audio' } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) io.to(s).emit('call_ended', { from: me });
@@ -1108,8 +1072,7 @@ io.on('connection', (socket) => {
 
   // Отклонить звонок
   socket.on('call_reject', async (data) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return;
+    const me = requireAuth(cb); if (!me) return;
     const { to, callType = 'audio' } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) io.to(s).emit('call_rejected', { from: me });
@@ -1121,8 +1084,7 @@ io.on('connection', (socket) => {
 
   // Получить историю звонков
   socket.on('get_call_history', async ({ withUser }, cb) => {
-    const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, logs: [] });
+    const me = requireAuth(cb); if (!me) return;
     try {
       const logs = await CallLog.find({
         $or: [{ from: me, to: withUser }, { from: withUser, to: me }]
