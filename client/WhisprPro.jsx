@@ -570,6 +570,8 @@ export default function WhisprPro() {
 
     // Авто-релогин при реконнекте (сервер мог перезапуститься)
     s.on('connect', () => {
+      // Только если уже были залогинены (реконнект, не первый вход)
+      if (!currentUserRef.current) return;
       try {
         const saved = localStorage.getItem('whispr_creds');
         if (!saved) return;
@@ -655,13 +657,14 @@ export default function WhisprPro() {
     s.on('call_failed', ({reason})=>{alert(reason);cleanupCall();});
     s.on('force_disconnect', ({reason})=>{handleLogout();});
     s.on('session_expired', () => {
-      // Сервер перезапустился и потерял сессию — тихо переавторизуемся
       try {
         const saved = localStorage.getItem('whispr_creds');
         if (!saved) return;
         const {u, p} = JSON.parse(saved);
         if (!u || !p) return;
-        s.emit('login', {username: u, password: p}, res => {
+        const sock = socketRef.current;
+        if (!sock) return;
+        sock.emit('login', {username: u, password: p}, res => {
           if (res.success) {
             setCurrentUser(res.user);
             setContacts(res.contacts||[]);
@@ -826,14 +829,26 @@ export default function WhisprPro() {
     // Загрузить закреплённое
     socket.emit('get_pinned_message', g._id, res=>{if(res.success&&res.message)setPinnedMessage(p=>({...p,[g._id]:res.message}));});
   };
+  const doSend = (s, chat, msg, replyData) => {
+    if (chat.type==='direct') s.emit('send_message', {to:chat.id, text:msg, type:'text', ...replyData}, res=>{
+      if (res&&!res.success) console.error('send_message error:', res.error);
+    });
+    else if (chat.type==='group') s.emit('send_group_message', {groupId:chat.id, text:msg, type:'text', ...replyData}, res=>{
+      if (res&&!res.success) console.error('send_group_message error:', res.error);
+    });
+    else if (chat.type==='channel') s.emit('send_channel_message', {channelId:chat.id, text:msg, type:'text'}, res=>{
+      if (res&&!res.success) console.error('send_channel_message error:', res.error);
+    });
+  };
+
   const handleSendMessage = e => {
     e.preventDefault();
     const msg = (text||'').trim();
     if (!msg || !activeChat) return;
     const replyData = replyTo ? {replyToId:replyTo._id, replyFrom:replyTo.from, replyText:replyTo.type==='voice'?'🎤 Голосовое':replyTo.type==='video'?'📹 Видео':replyTo.text} : {};
-    if (activeChat.type==='direct') socket.emit('send_message', {to:activeChat.id, text:msg, type:'text', ...replyData}, res=>{ if(res&&!res.success) console.error('send_message error:', res.error); });
-    else if (activeChat.type==='group') socket.emit('send_group_message', {groupId:activeChat.id, text:msg, type:'text', ...replyData}, res=>{ if(res&&!res.success) console.error('send_group_message error:', res.error); });
-    else if (activeChat.type==='channel') socket.emit('send_channel_message', {channelId:activeChat.id, text:msg, type:'text'}, res=>{ if(res&&!res.success) console.error('send_channel_message error:', res.error); });
+    const s = socketRef.current;
+    const chat = activeChatRef.current;
+    doSend(s, chat, msg, replyData);
     setText(''); setReplyTo(null);
     const key = getChatKey(activeChatRef.current);
     if (key) { draftsRef.current[key]=''; setDrafts(p=>({...p,[key]:''})); }
@@ -1286,6 +1301,7 @@ export default function WhisprPro() {
         </div>
       </div>
       <style>{CSS}</style>
+      <div style={{position:"fixed",bottom:10,left:"50%",transform:"translateX(-50%)",color:"rgba(255,255,255,0.2)",fontSize:"10px",pointerEvents:"none",letterSpacing:"0.2em",zIndex:9999,fontFamily:"monospace",whiteSpace:"nowrap"}}>by project maw</div>
     </div>
   );
 

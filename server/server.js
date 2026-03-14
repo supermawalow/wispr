@@ -915,13 +915,14 @@ io.on('connection', (socket) => {
     try {
       const user = await User.findOne({ username: me });
       if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
-      const channels = await Channel.find().limit(100);
+      const channels = await Channel.find({}).limit(100).lean();
+      console.log(`admin_get_channels: found ${channels.length} channels`);
       cb({ success: true, channels: channels.map(ch => ({
         _id: ch._id, name: ch.name, username: ch.username,
-        owner: ch.owner, subscriberCount: ch.subscribers.length,
+        owner: ch.owner, subscriberCount: (ch.subscribers||[]).length,
         isBlocked: ch.isBlocked||false, verified: ch.verified||false, createdAt: ch.createdAt
       }))});
-    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+    } catch (e) { console.error('admin_get_channels error:', e); cb({ success: false, error: 'Ошибка' }); }
   });
 
   socket.on('admin_block_channel', async (data, cb) => {
