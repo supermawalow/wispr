@@ -629,6 +629,27 @@ export default function WhisprPro() {
     s.on('call_rejected', ()=>{alert('Звонок отклонён');cleanupCall();});
     s.on('call_failed', ({reason})=>{alert(reason);cleanupCall();});
     s.on('force_disconnect', ({reason})=>{handleLogout();});
+    s.on('session_expired', () => {
+      // Сервер перезапустился и потерял сессию — тихо переавторизуемся
+      try {
+        const saved = localStorage.getItem('whispr_creds');
+        if (!saved) return;
+        const {u, p} = JSON.parse(saved);
+        if (!u || !p) return;
+        s.emit('login', {username: u, password: p}, res => {
+          if (res.success) {
+            setCurrentUser(res.user);
+            setContacts(res.contacts||[]);
+            setGroups(res.groups||[]);
+            setChannels(res.channels||[]);
+            const av = {};
+            (res.contacts||[]).forEach(c => { if(c.avatar) av[c.username]=c.avatar; });
+            if (res.user.avatar) av[res.user.username] = res.user.avatar;
+            setAvatars(av);
+          }
+        });
+      } catch(e) { /* ignore */ }
+    });
     s.on('new_channel_message', msg => {
       const key = `channel_${msg.channelId}`;
       setMessages(p => ({...p, [key]: [...(p[key]||[]), msg]}));
@@ -829,7 +850,12 @@ export default function WhisprPro() {
   const handleLeaveGroup = ()=>{if(!confirm('Покинуть группу?'))return;socket.emit('leave_group',activeChat.id,res=>{if(res.success){setGroups(p=>p.filter(g=>g._id!==activeChat.id));setActiveChat(null);setShowGroupInfo(false);}});};
   const searchAddMember = q=>{setAddMemberQuery(q);if(q.length<2){setAddMemberResults([]);return;}socket.emit('search_users',q,res=>{if(res.success)setAddMemberResults(res.results);});};
   const handleAddMember = u=>{socket.emit('group_add_member',{groupId:activeChat.id,username:u},res=>{if(res.success){setGroups(p=>p.map(g=>g._id===activeChat.id?res.group:g));setActiveChat(p=>p?{...p,data:res.group}:p);setAddMemberQuery('');setAddMemberResults([]);}else alert(res.error);});};
-  const loadAdminData = (search='')=>{socket.emit('admin_get_stats',res=>{if(res.success)setAdminStats(res.stats);});socket.emit('admin_get_users',{search},res=>{if(res.success)setAllUsers(res.users);});socket.emit('admin_get_logs',res=>{if(res.success)setAdminLogs(res.logs);});};
+  const loadAdminData = (search='')=>{
+    socket.emit('admin_get_stats',res=>{if(res.success)setAdminStats(res.stats);});
+    socket.emit('admin_get_users',{search},res=>{if(res.success)setAllUsers(res.users);});
+    socket.emit('admin_get_logs',res=>{if(res.success)setAdminLogs(res.logs);});
+    socket.emit('admin_get_channels',res=>{if(res.success)setAdminChannels(res.channels||[]);});
+  };
   const handlePromote = u=>{if(!confirm(`Сделать ${u} администратором?`))return;socket.emit('admin_promote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
   const handleDemote = u=>{if(!confirm(`Разжаловать ${u}?`))return;socket.emit('admin_demote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
   const handleMsgSearch = (q) => {
@@ -2111,7 +2137,7 @@ export default function WhisprPro() {
                     </div>
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0 flex-wrap justify-end">
-                    <button onClick={()=>socket.emit('admin_verify_user',{target:u.username,verify:!u.verified},res=>{if(res.success)loadAdminData(adminSearch);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.verified?'text-blue-300':'text-white/30'}`} style={{background:u.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:u.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}>✓ {u.verified?'Верифиц.':'Верифик.'}</button>
+                    <button onClick={()=>socket.emit('admin_verify_user',{target:u.username,verify:!u.verified},res=>{if(res.success){setAllUsers(p=>p.map(x=>x.username===u.username?{...x,verified:!u.verified}:x));}else alert(res.error);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.verified?'text-blue-300':'text-white/30'}`} style={{background:u.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:u.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}><VerifiedBadge size="sm"/> {u.verified?'Верифиц.':'Верифик.'}</button>
                     {u.username!=='admin'&&<button onClick={()=>socket.emit('admin_block_user',{target:u.username,block:!u.isBlocked},res=>{if(res.success)loadAdminData(adminSearch);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:u.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:u.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{u.isBlocked?'Разблок.':'Блок.'}</button>}
                     {!u.isAdmin&&<button onClick={()=>handlePromote(u.username)} className="px-2.5 py-1.5 rounded-lg text-xs text-yellow-300 flex items-center gap-1 hover:bg-yellow-500/10 transition-colors" style={{background:'rgba(234,179,8,0.06)',border:'1px solid rgba(234,179,8,0.15)'}}><Crown className="w-3 h-3"/>Повысить</button>}
                     {u.isAdmin&&u.username!=='admin'&&<button onClick={()=>handleDemote(u.username)} className="px-2.5 py-1.5 rounded-lg text-xs text-orange-300 flex items-center gap-1" style={{background:'rgba(249,115,22,0.06)',border:'1px solid rgba(249,115,22,0.15)'}}><Crown className="w-3 h-3"/>Разжаловать</button>}
@@ -2133,7 +2159,7 @@ export default function WhisprPro() {
                     <div className="text-white/25 text-xs">{ch.username?`@${ch.username}`:''} · {ch.subscriberCount} подписч. · @{ch.owner}</div>
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0">
-                    <button onClick={()=>socket.emit('admin_verify_channel',{channelId:ch._id,verify:!ch.verified},res=>{if(res.success)socket.emit('admin_get_channels',r=>{if(r.success)setAdminChannels(r.channels||[]);});})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.verified?'text-blue-300':'text-white/30'}`} style={{background:ch.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:ch.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}>✓ {ch.verified?'Верифиц.':'Верифик.'}</button>
+                    <button onClick={()=>socket.emit('admin_verify_channel',{channelId:ch._id,verify:!ch.verified},res=>{if(res.success){setAdminChannels(p=>p.map(x=>x._id===ch._id?{...x,verified:!ch.verified}:x));}else alert(res.error);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.verified?'text-blue-300':'text-white/30'}`} style={{background:ch.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:ch.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}><VerifiedBadge size="sm"/> {ch.verified?'Верифиц.':'Верифик.'}</button>
                     <button onClick={()=>socket.emit('admin_block_channel',{channelId:ch._id,block:!ch.isBlocked},res=>{if(res.success)socket.emit('admin_get_channels',r=>{if(r.success)setAdminChannels(r.channels||[]);});})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:ch.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:ch.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{ch.isBlocked?'Разблок.':'Блок.'}</button>
                   </div>
                 </div>

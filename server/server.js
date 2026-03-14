@@ -282,17 +282,11 @@ io.on('connection', (socket) => {
   // ── ОТПРАВИТЬ СООБЩЕНИЕ (личное) ──
   socket.on('send_message', async (data, cb) => {
     const me = onlineUsers.get(socket.id);
-    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    if (!me) { socket.emit('session_expired'); return cb({ success: false, error: 'Не авторизован' }); }
     try {
       const { to, text, type, audioData, replyToId, replyFrom, replyText } = data;
-      // Проверить блокировку
       const meUser = await User.findOne({ username: me });
-      if (!meUser) {
-        // Пользователь есть в сокете но не в БД (например после очистки MongoDB)
-        // Принудительно разлогиниваем чтобы клиент заново зарегистрировался
-        socket.emit('force_disconnect', { reason: 'Сессия устарела — войдите снова' });
-        return cb({ success: false, error: 'Пользователь не найден — войдите снова' });
-      }
+      if (!meUser) { socket.emit('session_expired'); return cb({ success: false, error: 'Пользователь не найден' }); }
       if (meUser.blockedUsers?.includes(to.toLowerCase())) return cb({ success: false, error: 'Вы заблокировали этого пользователя' });
       const toUser = await User.findOne({ username: to.toLowerCase() });
       if (toUser?.blockedUsers?.includes(me)) return cb({ success: false, error: 'Вы заблокированы этим пользователем' });
