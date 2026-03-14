@@ -91,6 +91,16 @@ function WhisprLogo({ size = 'xl', theme }) {
   );
 }
 
+function VerifiedBadge({ size = 'sm', gold = false }) {
+  const s = size === 'lg' ? 16 : size === 'md' ? 13 : 11;
+  return (
+    <svg width={s} height={s} viewBox="0 0 20 20" fill="none" style={{flexShrink:0,display:'inline-block',verticalAlign:'middle'}}>
+      <circle cx="10" cy="10" r="10" fill={gold ? '#f59e0b' : '#3b82f6'}/>
+      <path d="M6 10l2.5 2.5L14 7" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
 function LogoText({ size = 'xl', sub = false }) {
   const sizes = { sm: 36, md: 52, xl: 96 };
   const fs = sizes[size] || 96;
@@ -359,6 +369,7 @@ export default function WhisprPro() {
   const [allUsers, setAllUsers] = useState([]);
   const [adminLogs, setAdminLogs] = useState([]);
   const [adminSearch, setAdminSearch] = useState('');
+  const [adminChannels, setAdminChannels] = useState([]);
 
   // Настройки
   const [showSettings, setShowSettings] = useState(false);
@@ -1301,7 +1312,7 @@ export default function WhisprPro() {
               }}>
               <Avatar username={c.username} displayName={c.displayName} avatar={avatars[c.username]} size="sm" online={c.isOnline} />
               <div className="flex-1 min-w-0">
-                <div className={`text-sm font-medium truncate ${activeChat?.type==='direct'&&activeChat.id===c.username?'text-white':'text-white/60'}`}>{c.displayName}</div>
+                <div className={`text-sm font-medium truncate flex items-center gap-1 ${activeChat?.type==='direct'&&activeChat.id===c.username?'text-white':'text-white/60'}`}>{c.displayName}{c.verified&&<VerifiedBadge/>}</div>
                 {drafts[c.username]&&activeChat?.id!==c.username&&<div className="text-xs text-white/25 truncate flex items-center gap-1"><span style={{color:T.a,fontSize:'10px'}}>Черновик:</span>{drafts[c.username]}</div>}
                 <div className="text-xs text-white/20 truncate">@{c.username}</div>
               </div>
@@ -1339,7 +1350,7 @@ export default function WhisprPro() {
                 {ch.avatar?<img src={ch.avatar} alt="" className="w-full h-full object-cover"/>:<Radio className="w-4 h-4 text-white"/>}
               </div>
               <div className="flex-1 min-w-0">
-                <div className={`text-sm font-medium truncate ${activeChat?.type==='channel'&&activeChat.id===ch._id?'text-white':'text-white/60'}`}>{ch.name}</div>
+                <div className={`text-sm font-medium truncate flex items-center gap-1 ${activeChat?.type==='channel'&&activeChat.id===ch._id?'text-white':'text-white/60'}`}>{ch.name}{ch.verified&&<VerifiedBadge/>}</div>
                 <div className="text-xs text-white/20">📢 Канал · {ch.subscribers?.length||0} подп.</div>
               </div>
               {(unreadCounts[`channel_${ch._id}`]||0)>0&&<span className="flex-shrink-0 min-w-[18px] h-[18px] rounded-full text-[10px] font-bold text-white flex items-center justify-center px-1" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{unreadCounts[`channel_${ch._id}`]}</span>}
@@ -1358,7 +1369,7 @@ export default function WhisprPro() {
               <button onClick={()=>setShowSidebar(s=>!s)} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors flex-shrink-0" title="Боковая панель"><Menu className="w-5 h-5 text-white/30 hover:text-white/60 transition-colors" /></button>
               {activeChat.type==='direct'?<div className="cursor-pointer hover:opacity-80 transition-opacity" onClick={()=>handleViewProfile(activeChat.id)}><Avatar username={activeChatData?.username} displayName={activeChatData?.displayName} avatar={avatars[activeChatData?.username]} size="md" online={activeChatData?.isOnline}/></div>:activeChat.type==='channel'?<div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{activeChatData?.avatar?<img src={activeChatData.avatar} className="w-full h-full rounded-full object-cover" alt=""/>:<Radio className="w-5 h-5 text-white"/>}</div>:<GroupAvatar group={activeChatData} size="md"/>}
               <div className="flex-1 min-w-0">
-                <div className="text-white/90 font-semibold truncate">{activeChat.type==='direct'?activeChatData?.displayName:activeChatData?.name}</div>
+                <div className="text-white/90 font-semibold truncate flex items-center gap-1">{activeChat.type==='direct'?activeChatData?.displayName:activeChatData?.name}{activeChatData?.verified&&<VerifiedBadge size="md"/>}</div>
                 <div className="text-xs text-white/25">
                   {activeChat.type==='direct'
                     ? (activeChatData?.isOnline
@@ -2076,23 +2087,57 @@ export default function WhisprPro() {
           <div className="p-6">
             <div className="flex items-center justify-between mb-5"><h3 className="text-white/80 font-semibold text-base flex items-center gap-2"><Shield className="w-4 h-4"/>Панель администратора</h3><button onClick={()=>setShowAdminPanel(false)} className="p-1.5 rounded-lg hover:bg-white/5"><X className="w-4 h-4 text-white/30"/></button></div>
             {adminStats&&<div className="grid grid-cols-6 gap-2 mb-5">{[['Всего',adminStats.totalUsers],['Онлайн',adminStats.onlineUsers],['Сообщ.',adminStats.totalMessages],['Чатов',adminStats.totalChats],['Заблок.',adminStats.blockedUsers],['Групп',adminStats.totalGroups]].map(([l,v])=>(<div key={l} className="p-3 rounded-xl text-center" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.05)'}}><div className="text-white/25 text-xs">{l}</div><div className="text-xl font-bold text-white/80">{v}</div></div>))}</div>}
-            <div className="flex gap-2 mb-4">{['users','logs'].map(t=>(<button key={t} onClick={()=>setAdminTab(t)} className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${adminTab===t?'text-white/80':'text-white/25 hover:text-white/50'}`} style={adminTab===t?{background:`linear-gradient(135deg,${T.a}30,${T.b}20)`,border:'1px solid rgba(255,255,255,0.07)'}:{}}>{t==='users'?<><Users className="w-4 h-4"/>Пользователи</>:<><History className="w-4 h-4"/>История</>}</button>))}</div>
+            <div className="flex gap-2 mb-4">
+              {[['users','users'],['channels','channels'],['logs','logs']].map(([t])=>(
+                <button key={t} onClick={()=>{setAdminTab(t);if(t==='channels')socket.emit('admin_get_channels',res=>{if(res.success)setAdminChannels(res.channels||[]);});}} className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${adminTab===t?'text-white/80':'text-white/25 hover:text-white/50'}`} style={adminTab===t?{background:`linear-gradient(135deg,${T.a}30,${T.b}20)`,border:'1px solid rgba(255,255,255,0.07)'}:{}}>
+                  {t==='users'?<><Users className="w-4 h-4"/>Пользователи</>:t==='channels'?<><Radio className="w-4 h-4"/>Каналы</>:<><History className="w-4 h-4"/>История</>}
+                </button>
+              ))}
+            </div>
             {adminTab==='users'&&(
               <><input type="text" value={adminSearch} onChange={e=>{setAdminSearch(e.target.value);loadAdminData(e.target.value);}} className="w-full px-4 py-2.5 rounded-xl text-white/70 text-sm outline-none placeholder-white/20 mb-3" style={{background:'rgba(255,255,255,0.04)',border:'1px solid rgba(255,255,255,0.06)'}} placeholder="🔍 Поиск..."/>
               <div className="space-y-1.5">{allUsers.map(u=>(
                 <div key={u.username} className="px-4 py-3 rounded-xl flex items-center justify-between" style={{background:u.isBlocked?'rgba(239,68,68,0.04)':'rgba(255,255,255,0.02)',border:u.isBlocked?'1px solid rgba(239,68,68,0.1)':'1px solid rgba(255,255,255,0.04)'}}>
                   <div className="flex items-center gap-3">
                     <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${u.isOnline?'bg-green-400':'bg-gray-700'}`}></div>
-                    <div><div className="flex items-center gap-2"><span className="text-white/70 font-medium text-sm">{u.displayName}</span>{u.isAdmin&&<Crown className="w-3.5 h-3.5 text-yellow-500"/>}{u.isBlocked&&<Ban className="w-3.5 h-3.5 text-red-400"/>}</div><div className="text-white/25 text-xs">@{u.username}</div></div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-white/70 font-medium text-sm">{u.displayName}</span>
+                        {u.verified&&<VerifiedBadge/>}
+                        {u.isAdmin&&<Crown className="w-3.5 h-3.5 text-yellow-500"/>}
+                        {u.isBlocked&&<Ban className="w-3.5 h-3.5 text-red-400"/>}
+                      </div>
+                      <div className="text-white/25 text-xs">@{u.username}</div>
+                    </div>
                   </div>
-                  <div className="flex gap-1.5 flex-shrink-0">
+                  <div className="flex gap-1.5 flex-shrink-0 flex-wrap justify-end">
+                    <button onClick={()=>socket.emit('admin_verify_user',{target:u.username,verify:!u.verified},res=>{if(res.success)loadAdminData(adminSearch);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.verified?'text-blue-300':'text-white/30'}`} style={{background:u.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:u.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}>✓ {u.verified?'Верифиц.':'Верифик.'}</button>
                     {u.username!=='admin'&&<button onClick={()=>socket.emit('admin_block_user',{target:u.username,block:!u.isBlocked},res=>{if(res.success)loadAdminData(adminSearch);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:u.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:u.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{u.isBlocked?'Разблок.':'Блок.'}</button>}
                     {!u.isAdmin&&<button onClick={()=>handlePromote(u.username)} className="px-2.5 py-1.5 rounded-lg text-xs text-yellow-300 flex items-center gap-1 hover:bg-yellow-500/10 transition-colors" style={{background:'rgba(234,179,8,0.06)',border:'1px solid rgba(234,179,8,0.15)'}}><Crown className="w-3 h-3"/>Повысить</button>}
-                    {u.isAdmin&&u.username!=='admin'&&<button onClick={()=>handleDemote(u.username)} className="px-2.5 py-1.5 rounded-lg text-xs text-orange-300 flex items-center gap-1 hover:bg-orange-500/10 transition-colors" style={{background:'rgba(249,115,22,0.06)',border:'1px solid rgba(249,115,22,0.15)'}}><Crown className="w-3 h-3"/>Разжаловать</button>}
-                    {u.username!=='admin'&&<button onClick={()=>{if(confirm(`Удалить ${u.username}?`))socket.emit('admin_delete_user',u.username,res=>{if(res.success)loadAdminData(adminSearch);});}} className="p-1.5 rounded-lg text-red-400/70 hover:bg-red-500/8 transition-colors" style={{border:'1px solid rgba(239,68,68,0.1)'}}><Trash2 className="w-3.5 h-3.5"/></button>}
+                    {u.isAdmin&&u.username!=='admin'&&<button onClick={()=>handleDemote(u.username)} className="px-2.5 py-1.5 rounded-lg text-xs text-orange-300 flex items-center gap-1" style={{background:'rgba(249,115,22,0.06)',border:'1px solid rgba(249,115,22,0.15)'}}><Crown className="w-3 h-3"/>Разжаловать</button>}
+                    {u.username!=='admin'&&<button onClick={()=>{if(confirm(`Удалить ${u.username}?`))socket.emit('admin_delete_user',u.username,res=>{if(res.success)loadAdminData(adminSearch);});}} className="p-1.5 rounded-lg text-red-400/70 transition-colors" style={{border:'1px solid rgba(239,68,68,0.1)'}}><Trash2 className="w-3.5 h-3.5"/></button>}
                   </div>
                 </div>
               ))}</div></>
+            )}
+            {adminTab==='channels'&&(
+              <div className="space-y-1.5">{(adminChannels||[]).length===0&&<p className="text-center py-10 text-white/15">Нет каналов</p>}
+              {(adminChannels||[]).map(ch=>(
+                <div key={ch._id} className="px-4 py-3 rounded-xl flex items-center justify-between" style={{background:ch.isBlocked?'rgba(239,68,68,0.04)':'rgba(255,255,255,0.02)',border:ch.isBlocked?'1px solid rgba(239,68,68,0.1)':'1px solid rgba(255,255,255,0.04)'}}>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-white/70 font-medium text-sm">{ch.name}</span>
+                      {ch.verified&&<VerifiedBadge/>}
+                      {ch.isBlocked&&<Ban className="w-3.5 h-3.5 text-red-400"/>}
+                    </div>
+                    <div className="text-white/25 text-xs">{ch.username?`@${ch.username}`:''} · {ch.subscriberCount} подписч. · @{ch.owner}</div>
+                  </div>
+                  <div className="flex gap-1.5 flex-shrink-0">
+                    <button onClick={()=>socket.emit('admin_verify_channel',{channelId:ch._id,verify:!ch.verified},res=>{if(res.success)socket.emit('admin_get_channels',r=>{if(r.success)setAdminChannels(r.channels||[]);});})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.verified?'text-blue-300':'text-white/30'}`} style={{background:ch.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:ch.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}>✓ {ch.verified?'Верифиц.':'Верифик.'}</button>
+                    <button onClick={()=>socket.emit('admin_block_channel',{channelId:ch._id,block:!ch.isBlocked},res=>{if(res.success)socket.emit('admin_get_channels',r=>{if(r.success)setAdminChannels(r.channels||[]);});})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:ch.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:ch.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{ch.isBlocked?'Разблок.':'Блок.'}</button>
+                  </div>
+                </div>
+              ))}</div>
             )}
             {adminTab==='logs'&&<div className="space-y-1.5">{adminLogs.length===0&&<p className="text-center py-10 text-white/15">Нет действий</p>}{adminLogs.map((log,i)=>(<div key={i} className="px-4 py-3 rounded-xl flex items-center justify-between" style={{background:'rgba(255,255,255,0.02)'}}><div><div className="text-white/60 text-sm">{log.details}</div><div className="text-white/20 text-xs mt-0.5">@{log.admin}</div></div><div className="text-white/20 text-xs flex-shrink-0 ml-4">{fmtTime(log.timestamp)}</div></div>))}</div>}
           </div>
@@ -2317,7 +2362,7 @@ export default function WhisprPro() {
         </div>
       )}
 
-      <div style={{position:'fixed',bottom:8,left:'50%',transform:'translateX(-50%)',color:'rgba(255,255,255,0.07)',fontSize:'10px',pointerEvents:'none',letterSpacing:'0.15em',zIndex:100}}>by Meowlentii</div>
+      <div style={{position:'fixed',bottom:8,left:'50%',transform:'translateX(-50%)',color:'rgba(255,255,255,0.07)',fontSize:'10px',pointerEvents:'none',letterSpacing:'0.15em',zIndex:100}}>by project maw</div>
       <style>{CSS}</style>
     </div>
   );

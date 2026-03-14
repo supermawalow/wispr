@@ -29,6 +29,7 @@ const userSchema = new mongoose.Schema({
   password:     { type: String, required: true },
   isAdmin:      { type: Boolean, default: false },
   isBlocked:    { type: Boolean, default: false },
+  verified:     { type: Boolean, default: false },
   avatar:       { type: String, default: null },
   contacts:     [{ type: String }],
   bio:          { type: String, default: '' },
@@ -91,6 +92,8 @@ const channelSchema = new mongoose.Schema({
   admins:      [{ type: String }],
   subscribers: [{ type: String }],
   isPrivate:   { type: Boolean, default: false },
+  isBlocked:   { type: Boolean, default: false },
+  verified:    { type: Boolean, default: false },
   createdAt:   { type: Date, default: Date.now }
 });
 
@@ -173,6 +176,7 @@ io.on('connection', (socket) => {
       const contacts = contactDocs.map(c => ({
         username: c.username, displayName: c.displayName, bio: c.bio||'',
         avatar: c.avatar, isOnline: userSockets.has(c.username), isBlocked: c.isBlocked,
+        verified: c.verified||false,
         isBlockedByMe: (user.blockedUsers||[]).includes(c.username)
       }));
 
@@ -846,7 +850,7 @@ io.on('connection', (socket) => {
       const users = await User.find(query).limit(100);
       cb({ success: true, users: users.map(u => ({
         username: u.username, displayName: u.displayName,
-        isAdmin: u.isAdmin, isBlocked: u.isBlocked,
+        isAdmin: u.isAdmin, isBlocked: u.isBlocked, verified: u.verified||false,
         contactsCount: u.contacts.length, createdAt: u.createdAt,
         isOnline: userSockets.has(u.username)
       }))});
@@ -921,6 +925,62 @@ io.on('connection', (socket) => {
       const t = await User.findOneAndUpdate({ username: target.toLowerCase() }, { isAdmin: false });
       if (!t) return cb({ success: false, error: 'Пользователь не найден' });
       await logAdminAction(me, 'DEMOTE_USER', target, `${target} разжалован из администраторов`);
+      cb({ success: true });
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  socket.on('admin_verify_user', async (data, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      const user = await User.findOne({ username: me });
+      if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
+      const { target, verify } = data;
+      await User.updateOne({ username: target.toLowerCase() }, { verified: verify });
+      await logAdminAction(me, verify ? 'VERIFY_USER' : 'UNVERIFY_USER', target, `${target} ${verify ? 'верифицирован' : 'снята верификация'}`);
+      cb({ success: true });
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  socket.on('admin_get_channels', async (cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      const user = await User.findOne({ username: me });
+      if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
+      const channels = await Channel.find().limit(100);
+      cb({ success: true, channels: channels.map(ch => ({
+        _id: ch._id, name: ch.name, username: ch.username,
+        owner: ch.owner, subscriberCount: ch.subscribers.length,
+        isBlocked: ch.isBlocked||false, verified: ch.verified||false, createdAt: ch.createdAt
+      }))});
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  socket.on('admin_block_channel', async (data, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      const user = await User.findOne({ username: me });
+      if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
+      const { channelId, block } = data;
+      const ch = await Channel.findByIdAndUpdate(channelId, { isBlocked: block }, { new: true });
+      if (!ch) return cb({ success: false, error: 'Канал не найден' });
+      await logAdminAction(me, block ? 'BLOCK_CHANNEL' : 'UNBLOCK_CHANNEL', ch.name, `Канал ${ch.name} ${block ? 'заблокирован' : 'разблокирован'}`);
+      cb({ success: true });
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  socket.on('admin_verify_channel', async (data, cb) => {
+    const me = onlineUsers.get(socket.id);
+    if (!me) return cb({ success: false, error: 'Не авторизован' });
+    try {
+      const user = await User.findOne({ username: me });
+      if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
+      const { channelId, verify } = data;
+      const ch = await Channel.findByIdAndUpdate(channelId, { verified: verify }, { new: true });
+      if (!ch) return cb({ success: false, error: 'Канал не найден' });
+      await logAdminAction(me, verify ? 'VERIFY_CHANNEL' : 'UNVERIFY_CHANNEL', ch.name, `Канал ${ch.name} ${verify ? 'верифицирован' : 'снята верификация'}`);
       cb({ success: true });
     } catch (e) { cb({ success: false, error: 'Ошибка' }); }
   });
