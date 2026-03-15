@@ -853,7 +853,15 @@ export default function WhisprPro() {
     const key = getChatKey(activeChatRef.current);
     if (key) { draftsRef.current[key]=''; setDrafts(p=>({...p,[key]:''})); }
   };
-  const handleTyping = ()=>{if(!activeChat)return;if(activeChat.type==='direct')socket.emit('typing',activeChat.id);else socket.emit('group_typing',activeChat.id);};
+  const lastTypingEmit = useRef(0);
+  const handleTyping = ()=>{
+    if(!activeChat) return;
+    const now = Date.now();
+    if (now - lastTypingEmit.current < 2000) return; // throttle
+    lastTypingEmit.current = now;
+    if(activeChat.type==='direct') socketRef.current?.emit('typing',activeChat.id);
+    else socketRef.current?.emit('group_typing',activeChat.id);
+  };
   const startEdit = msg=>{setEditingMsgId(msg._id||msg.id);setEditText(msg.text);setMsgMenu(null);};
   const submitEdit = e=>{e.preventDefault();if(!editText.trim())return;socket.emit('edit_message',{messageId:editingMsgId,newText:editText.trim()},res=>{if(res.success){setEditingMsgId(null);setEditText('');}});};
   const deleteMsg = (msg,forAll)=>{socket.emit('delete_message',{messageId:msg._id||msg.id,deleteFor:forAll?'all':'me'},()=>{});setMsgMenu(null);};
@@ -898,8 +906,8 @@ export default function WhisprPro() {
     s.emit('admin_get_logs', res=>{if(res.success)setAdminLogs(res.logs);});
     s.emit('admin_get_channels', res=>{if(res.success)setAdminChannels(res.channels||[]);});
   };
-  const handlePromote = u=>{if(!confirm(`Сделать ${u} администратором?`))return;socket.emit('admin_promote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
-  const handleDemote = u=>{if(!confirm(`Разжаловать ${u}?`))return;socket.emit('admin_demote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
+  const handlePromote = u=>{if(!confirm(`Сделать ${u} администратором?`))return;socketRef.current?.emit('admin_promote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
+  const handleDemote = u=>{if(!confirm(`Разжаловать ${u}?`))return;socketRef.current?.emit('admin_demote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
   const handleMsgSearch = (q) => {
     setMsgSearchQuery(q);
     if (!q || q.length < 2) { setMsgSearchResults([]); return; }
@@ -1606,14 +1614,14 @@ export default function WhisprPro() {
                             <div className="text-5xl leading-none select-none" style={{filter:'drop-shadow(0 2px 8px rgba(0,0,0,0.3))'}}>{msg.text}</div>
                           ):msg.type==='gif'?(
                             <div className="relative max-w-xs">
-                              <img src={msg.audioData} alt={msg.text||'GIF'} className="rounded-2xl max-w-full cursor-zoom-in hover:opacity-90 transition-opacity"
+                              <img src={msg.audioData} alt={msg.text||'GIF'} loading="lazy" className="rounded-2xl max-w-full cursor-zoom-in hover:opacity-90 transition-opacity"
                                 style={{maxHeight:'240px',objectFit:'cover'}}
                                 onClick={()=>setLightbox({src:msg.audioData, alt:'GIF'})}/>
                               <div className="absolute bottom-2 left-2 text-[10px] font-bold text-white/80 px-1.5 py-0.5 rounded" style={{background:'rgba(0,0,0,0.5)'}}>GIF</div>
                             </div>
                           ):msg.type==='image'?(
                             <div className="relative max-w-xs">
-                              <img src={msg.audioData} alt={msg.text||'фото'} className="rounded-2xl max-w-full cursor-zoom-in hover:opacity-90 transition-opacity"
+                              <img src={msg.audioData} alt={msg.text||'фото'} loading="lazy" className="rounded-2xl max-w-full cursor-zoom-in hover:opacity-90 transition-opacity"
                                 style={{maxHeight:'300px',objectFit:'cover'}}
                                 onClick={()=>setLightbox({src:msg.audioData, alt:msg.text||'фото'})}/>
                             </div>
@@ -2158,7 +2166,7 @@ export default function WhisprPro() {
             {adminStats&&<div className="grid grid-cols-6 gap-2 mb-5">{[['Всего',adminStats.totalUsers],['Онлайн',adminStats.onlineUsers],['Сообщ.',adminStats.totalMessages],['Чатов',adminStats.totalChats],['Заблок.',adminStats.blockedUsers],['Групп',adminStats.totalGroups]].map(([l,v])=>(<div key={l} className="p-3 rounded-xl text-center" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.05)'}}><div className="text-white/25 text-xs">{l}</div><div className="text-xl font-bold text-white/80">{v}</div></div>))}</div>}
             <div className="flex gap-2 mb-4">
               {[['users','users'],['channels','channels'],['logs','logs']].map(([t])=>(
-                <button key={t} onClick={()=>{setAdminTab(t);if(t==='channels')socket.emit('admin_get_channels',res=>{if(res.success)setAdminChannels(res.channels||[]);});}} className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${adminTab===t?'text-white/80':'text-white/25 hover:text-white/50'}`} style={adminTab===t?{background:`linear-gradient(135deg,${T.a}30,${T.b}20)`,border:'1px solid rgba(255,255,255,0.07)'}:{}}>
+                <button key={t} onClick={()=>{setAdminTab(t);if(t==='channels')socketRef.current?.emit('admin_get_channels',res=>{if(res.success)setAdminChannels(res.channels||[]);});}} className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${adminTab===t?'text-white/80':'text-white/25 hover:text-white/50'}`} style={adminTab===t?{background:`linear-gradient(135deg,${T.a}30,${T.b}20)`,border:'1px solid rgba(255,255,255,0.07)'}:{}}>
                   {t==='users'?<><Users className="w-4 h-4"/>Пользователи</>:t==='channels'?<><Radio className="w-4 h-4"/>Каналы</>:<><History className="w-4 h-4"/>История</>}
                 </button>
               ))}
@@ -2180,11 +2188,11 @@ export default function WhisprPro() {
                     </div>
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0 flex-wrap justify-end">
-                    <button onClick={()=>socket.emit('admin_verify_user',{target:u.username,verify:!u.verified},res=>{if(res.success){setAllUsers(p=>p.map(x=>x.username===u.username?{...x,verified:!u.verified}:x));}else alert(res.error);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.verified?'text-blue-300':'text-white/30'}`} style={{background:u.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:u.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}><VerifiedBadge size="sm"/> {u.verified?'Верифиц.':'Верифик.'}</button>
-                    {u.username!=='admin'&&<button onClick={()=>socket.emit('admin_block_user',{target:u.username,block:!u.isBlocked},res=>{if(res.success)loadAdminData(adminSearch);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:u.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:u.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{u.isBlocked?'Разблок.':'Блок.'}</button>}
+                    <button onClick={()=>socketRef.current?.emit('admin_verify_user',{target:u.username,verify:!u.verified},res=>{if(res.success){setAllUsers(p=>p.map(x=>x.username===u.username?{...x,verified:!u.verified}:x));}else alert(res.error);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.verified?'text-blue-300':'text-white/30'}`} style={{background:u.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:u.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}><VerifiedBadge size="sm"/> {u.verified?'Верифиц.':'Верифик.'}</button>
+                    {u.username!=='admin'&&<button onClick={()=>socketRef.current?.emit('admin_block_user',{target:u.username,block:!u.isBlocked},res=>{if(res.success)loadAdminData(adminSearch);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:u.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:u.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{u.isBlocked?'Разблок.':'Блок.'}</button>}
                     {!u.isAdmin&&<button onClick={()=>handlePromote(u.username)} className="px-2.5 py-1.5 rounded-lg text-xs text-yellow-300 flex items-center gap-1 hover:bg-yellow-500/10 transition-colors" style={{background:'rgba(234,179,8,0.06)',border:'1px solid rgba(234,179,8,0.15)'}}><Crown className="w-3 h-3"/>Повысить</button>}
                     {u.isAdmin&&u.username!=='admin'&&<button onClick={()=>handleDemote(u.username)} className="px-2.5 py-1.5 rounded-lg text-xs text-orange-300 flex items-center gap-1" style={{background:'rgba(249,115,22,0.06)',border:'1px solid rgba(249,115,22,0.15)'}}><Crown className="w-3 h-3"/>Разжаловать</button>}
-                    {u.username!=='admin'&&<button onClick={()=>{if(confirm(`Удалить ${u.username}?`))socket.emit('admin_delete_user',u.username,res=>{if(res.success)loadAdminData(adminSearch);});}} className="p-1.5 rounded-lg text-red-400/70 transition-colors" style={{border:'1px solid rgba(239,68,68,0.1)'}}><Trash2 className="w-3.5 h-3.5"/></button>}
+                    {u.username!=='admin'&&<button onClick={()=>{if(confirm(`Удалить ${u.username}?`))socketRef.current?.emit('admin_delete_user',u.username,res=>{if(res.success)loadAdminData(adminSearch);});}} className="p-1.5 rounded-lg text-red-400/70 transition-colors" style={{border:'1px solid rgba(239,68,68,0.1)'}}><Trash2 className="w-3.5 h-3.5"/></button>}
                   </div>
                 </div>
               ))}</div></>
@@ -2202,8 +2210,8 @@ export default function WhisprPro() {
                     <div className="text-white/25 text-xs">{ch.username?`@${ch.username}`:''} · {ch.subscriberCount} подписч. · @{ch.owner}</div>
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0">
-                    <button onClick={()=>socket.emit('admin_verify_channel',{channelId:ch._id,verify:!ch.verified},res=>{if(res.success){setAdminChannels(p=>p.map(x=>x._id===ch._id?{...x,verified:!ch.verified}:x));}else alert(res.error);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.verified?'text-blue-300':'text-white/30'}`} style={{background:ch.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:ch.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}><VerifiedBadge size="sm"/> {ch.verified?'Верифиц.':'Верифик.'}</button>
-                    <button onClick={()=>socket.emit('admin_block_channel',{channelId:ch._id,block:!ch.isBlocked},res=>{if(res.success)socket.emit('admin_get_channels',r=>{if(r.success)setAdminChannels(r.channels||[]);});})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:ch.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:ch.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{ch.isBlocked?'Разблок.':'Блок.'}</button>
+                    <button onClick={()=>socketRef.current?.emit('admin_verify_channel',{channelId:ch._id,verify:!ch.verified},res=>{if(res.success){setAdminChannels(p=>p.map(x=>x._id===ch._id?{...x,verified:!ch.verified}:x));}else alert(res.error);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.verified?'text-blue-300':'text-white/30'}`} style={{background:ch.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:ch.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}><VerifiedBadge size="sm"/> {ch.verified?'Верифиц.':'Верифик.'}</button>
+                    <button onClick={()=>socketRef.current?.emit('admin_block_channel',{channelId:ch._id,block:!ch.isBlocked},res=>{if(res.success)socketRef.current?.emit('admin_get_channels',r=>{if(r.success)setAdminChannels(r.channels||[]);});})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:ch.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:ch.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{ch.isBlocked?'Разблок.':'Блок.'}</button>
                   </div>
                 </div>
               ))}</div>
@@ -2299,7 +2307,7 @@ export default function WhisprPro() {
                     <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}><Radio className="w-4 h-4 text-white"/></div>
                     <div className="flex-1 min-w-0"><div className="text-white/70 text-sm truncate">{ch.name}</div><div className="text-white/25 text-xs">{ch.username?`@${ch.username}`:''} · {ch.subscribers.length} подп.</div></div>
                     {!channels.find(x=>x._id===ch._id)&&(
-                      <button onClick={()=>socket.emit('subscribe_channel',ch._id,res=>{if(res.success){setChannels(p=>[...p,res.channel]);openChannelChat(res.channel);setShowCreateChannel(false);}})}
+                      <button onClick={()=>socketRef.current?.emit('subscribe_channel',ch._id,res=>{if(res.success){setChannels(p=>[...p,res.channel]);openChannelChat(res.channel);setShowCreateChannel(false);}})}
                         className="px-2.5 py-1.5 rounded-lg text-white/50 text-xs hover:bg-white/8" style={{background:'rgba(255,255,255,0.05)'}}>Подписаться</button>
                     )}
                     {channels.find(x=>x._id===ch._id)&&<span className="text-white/25 text-xs">✓</span>}
@@ -2354,7 +2362,7 @@ export default function WhisprPro() {
 
 
               <button type="submit" className="w-full py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 transition-opacity" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>💾 Сохранить</button>
-              <button type="button" onClick={()=>{if(confirm('Удалить канал навсегда?'))socket.emit('delete_channel',editingChannel._id,res=>{if(res.success){setShowChannelSettings(false);setChannels(p=>p.filter(x=>x._id!==editingChannel._id));setActiveChat(null);}});}}
+              <button type="button" onClick={()=>{if(confirm('Удалить канал навсегда?'))socketRef.current?.emit('delete_channel',editingChannel._id,res=>{if(res.success){setShowChannelSettings(false);setChannels(p=>p.filter(x=>x._id!==editingChannel._id));setActiveChat(null);}});}}
                 className="w-full py-2.5 rounded-xl text-red-400/70 text-sm hover:bg-red-500/8 transition-colors" style={{border:'1px solid rgba(239,68,68,0.15)'}}>🗑 Удалить канал</button>
             </form>
           </div>
