@@ -674,6 +674,13 @@ export default function WhisprPro() {
             (res.contacts||[]).forEach(c => { if(c.avatar) av[c.username]=c.avatar; });
             if (res.user.avatar) av[res.user.username] = res.user.avatar;
             setAvatars(av);
+            // После реавторизации перезагружаем данные если нужно
+            if (res.user.isAdmin) {
+              sock.emit('admin_get_stats', r=>{if(r.success)setAdminStats(r.stats);});
+              sock.emit('admin_get_users', {search:''}, r=>{if(r.success)setAllUsers(r.users);});
+              sock.emit('admin_get_channels', r=>{if(r.success)setAdminChannels(r.channels||[]);});
+              sock.emit('admin_get_logs', r=>{if(r.success)setAdminLogs(r.logs);});
+            }
           }
         });
       } catch(e) { /* ignore */ }
@@ -726,7 +733,7 @@ export default function WhisprPro() {
       const {u,p}=JSON.parse(saved);
       if(!u||!p)return;
       savedCredsRef.current={u,p};
-      socket.emit('login',{username:u,password:p},res=>{
+      socketRef.current?.emit('login',{username:u,password:p},res=>{
         if(res.success){
           setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);
           const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;
@@ -746,8 +753,8 @@ export default function WhisprPro() {
   // Плавный переход чата
   useEffect(()=>{if(activeChat){setChatVisible(false);setTimeout(()=>setChatVisible(true),50);}},[activeChat?.id]);
 
-  const handleRegister = e => { e.preventDefault();setAuthError('');socket.emit('register',{username,displayName,password},res=>{if(res.success)handleLogin(e);else setAuthError(res.error);}); };
-  const handleLogin = e => { e.preventDefault();setAuthError('');socket.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){/* storage unavailable */}setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
+  const handleRegister = e => { e.preventDefault();setAuthError('');socketRef.current?.emit('register',{username,displayName,password},res=>{if(res.success)handleLogin(e);else setAuthError(res.error);}); };
+  const handleLogin = e => { e.preventDefault();setAuthError('');socketRef.current?.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){/* storage unavailable */}setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
   const handleLogout = () => { cleanupCall();try{localStorage.removeItem('whispr_creds');}catch(e){/* storage unavailable */}setIsAuthenticated(false);setCurrentUser(null);setContacts([]);setGroups([]);setActiveChat(null);setMessages({});setUsername('');setPassword('');setDisplayName(''); };
 
   const handleAvatarUpload = (e, fromSettings=false) => {
@@ -757,13 +764,13 @@ export default function WhisprPro() {
     r.onloadend=()=>{
       if(fromSettings){
         setProfileError('');setSavingProfile(true);
-        socket.emit('update_profile',{avatar:r.result},res=>{
+        socketRef.current?.emit('update_profile',{avatar:r.result},res=>{
           setSavingProfile(false);
           if(res.success){setAvatars(p=>({...p,[currentUser.username]:r.result}));setCurrentUser(p=>({...p,avatar:r.result}));setProfileSuccess('Аватар обновлён!');}
           else setProfileError(res.error);
         });
       } else {
-        socket.emit('update_avatar',r.result,res=>{if(res.success){setAvatars(p=>({...p,[currentUser.username]:r.result}));setCurrentUser(p=>({...p,avatar:r.result}));}});
+        socketRef.current?.emit('update_avatar',r.result,res=>{if(res.success){setAvatars(p=>({...p,[currentUser.username]:r.result}));setCurrentUser(p=>({...p,avatar:r.result}));}});
       }
     };
     r.readAsDataURL(f);
@@ -777,7 +784,7 @@ export default function WhisprPro() {
     if(editUsername.trim()&&editUsername.trim()!==currentUser.username)data.newUsername=editUsername.trim();
     if(!Object.keys(data).length){setSavingProfile(false);setProfileSuccess('Нечего менять');return;}
     const currentPassword = savedCredsRef.current?.p || password || (()=>{try{const s=localStorage.getItem('whispr_creds');return s?JSON.parse(s).p:'';}catch{return '';}})();
-    socket.emit('update_profile',data,res=>{
+    socketRef.current?.emit('update_profile',data,res=>{
       setSavingProfile(false);
       if(res.success){
         setCurrentUser(res.user);
@@ -785,7 +792,7 @@ export default function WhisprPro() {
           setActiveChat(null);setMessages({});setContacts([]);
           const savedP=savedCredsRef.current?.p||password||currentPassword;
           try{localStorage.setItem('whispr_creds',JSON.stringify({u:res.user.username,p:savedP}));}catch(e){/* storage unavailable */}
-          socket.emit('login',{username:res.user.username,password:savedP},r2=>{if(r2.success){setContacts(r2.contacts||[]);setGroups(r2.groups||[]);}});
+          socketRef.current?.emit('login',{username:res.user.username,password:savedP},r2=>{if(r2.success){setContacts(r2.contacts||[]);setGroups(r2.groups||[]);}});
         }
         setProfileSuccess('Профиль обновлён!');
         setEditUsername(res.user.username);
@@ -798,24 +805,24 @@ export default function WhisprPro() {
   const handleSearch = q => {
     setSearchQuery(q);
     if (q.length < 2) { setSearchResults([]); setSearchChannelResults([]); return; }
-    socket.emit('search_users', q, res => {
+    socketRef.current?.emit('search_users', q, res => {
       if (res.success) {
         setSearchResults(res.results || []);
         setSearchChannelResults(res.channels || []);
       }
     });
   };
-  const handleAddContact = u=>{socket.emit('add_contact',u,res=>{if(res.success){setContacts(p=>[...p,res.contact]);if(res.contact.avatar)setAvatars(p=>({...p,[res.contact.username]:res.contact.avatar}));setSearchResults([]);setSearchQuery('');setShowSearch(false);}});};
-  const handleRemoveContact = u=>{if(!confirm(`Удалить ${u}?`))return;socket.emit('remove_contact',u,res=>{if(res.success){setContacts(p=>p.filter(c=>c.username!==u));if(activeChat?.id===u)setActiveChat(null);}});};
+  const handleAddContact = u=>{socketRef.current?.emit('add_contact',u,res=>{if(res.success){setContacts(p=>[...p,res.contact]);if(res.contact.avatar)setAvatars(p=>({...p,[res.contact.username]:res.contact.avatar}));setSearchResults([]);setSearchQuery('');setShowSearch(false);}});};
+  const handleRemoveContact = u=>{if(!confirm(`Удалить ${u}?`))return;socketRef.current?.emit('remove_contact',u,res=>{if(res.success){setContacts(p=>p.filter(c=>c.username!==u));if(activeChat?.id===u)setActiveChat(null);}});};
   const openDirectChat = c=>{
     setActiveChat({type:'direct',id:c.username,data:c});
     setShowSearch(false);setReplyTo(null);setUnreadCounts(p=>({...p,[c.username]:0}));
     const draft = draftsRef.current[c.username] || '';
-    setText(draft);socket.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});};
+    setText(draft);socketRef.current?.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});};
   const openChannelChat = (ch) => {
     setActiveChat({type:'channel', id:ch._id, data:ch});
     setUnreadCounts(p=>({...p,[`channel_${ch._id}`]:0}));
-    socket.emit('load_channel_chat', ch._id, res=>{
+    socketRef.current?.emit('load_channel_chat', ch._id, res=>{
       if(res.success) setMessages(p=>({...p,[`channel_${ch._id}`]:res.messages}));
     });
   };
@@ -825,9 +832,9 @@ export default function WhisprPro() {
     setUnreadCounts(p=>({...p,[`group_${g._id}`]:0}));
     const draft = draftsRef.current[`group_${g._id}`] || '';
     setText(draft);
-    socket.emit('load_group_chat',g._id,res=>{if(res.success)setMessages(p=>({...p,[`group_${g._id}`]:res.messages}));});
+    socketRef.current?.emit('load_group_chat',g._id,res=>{if(res.success)setMessages(p=>({...p,[`group_${g._id}`]:res.messages}));});
     // Загрузить закреплённое
-    socket.emit('get_pinned_message', g._id, res=>{if(res.success&&res.message)setPinnedMessage(p=>({...p,[g._id]:res.message}));});
+    socketRef.current?.emit('get_pinned_message', g._id, res=>{if(res.success&&res.message)setPinnedMessage(p=>({...p,[g._id]:res.message}));});
   };
   const doSend = (s, chat, msg, replyData) => {
     if (chat.type==='direct') s.emit('send_message', {to:chat.id, text:msg, type:'text', ...replyData}, res=>{
@@ -863,9 +870,9 @@ export default function WhisprPro() {
     else socketRef.current?.emit('group_typing',activeChat.id);
   };
   const startEdit = msg=>{setEditingMsgId(msg._id||msg.id);setEditText(msg.text);setMsgMenu(null);};
-  const submitEdit = e=>{e.preventDefault();if(!editText.trim())return;socket.emit('edit_message',{messageId:editingMsgId,newText:editText.trim()},res=>{if(res.success){setEditingMsgId(null);setEditText('');}});};
-  const deleteMsg = (msg,forAll)=>{socket.emit('delete_message',{messageId:msg._id||msg.id,deleteFor:forAll?'all':'me'},()=>{});setMsgMenu(null);};
-  const submitForward = to=>{socket.emit('forward_message',{messageId:forwardMsg._id||forwardMsg.id,toUsername:to},res=>{if(res.success){setShowForwardModal(false);setForwardMsg(null);const c=contacts.find(x=>x.username===to);if(c)openDirectChat(c);}});};
+  const submitEdit = e=>{e.preventDefault();if(!editText.trim())return;socketRef.current?.emit('edit_message',{messageId:editingMsgId,newText:editText.trim()},res=>{if(res.success){setEditingMsgId(null);setEditText('');}});};
+  const deleteMsg = (msg,forAll)=>{socketRef.current?.emit('delete_message',{messageId:msg._id||msg.id,deleteFor:forAll?'all':'me'},()=>{});setMsgMenu(null);};
+  const submitForward = to=>{socketRef.current?.emit('forward_message',{messageId:forwardMsg._id||forwardMsg.id,toUsername:to},res=>{if(res.success){setShowForwardModal(false);setForwardMsg(null);const c=contacts.find(x=>x.username===to);if(c)openDirectChat(c);}});};
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
@@ -880,8 +887,8 @@ export default function WhisprPro() {
         const r = new FileReader();
         r.onloadend = () => {
           const audioData = r.result;
-          if (chat.type === 'direct') socket.emit('send_message', {to:chat.id, text:'', type:'voice', audioData}, res => { if(!res?.success) console.error('Voice send failed:', res); });
-          else if (chat.type === 'group') socket.emit('send_group_message', {groupId:chat.id, text:'', type:'voice', audioData}, res => { if(!res?.success) console.error('Voice group send failed:', res); });
+          if (chat.type === 'direct') socketRef.current?.emit('send_message', {to:chat.id, text:'', type:'voice', audioData}, res => { if(!res?.success) console.error('Voice send failed:', res); });
+          else if (chat.type === 'group') socketRef.current?.emit('send_group_message', {groupId:chat.id, text:'', type:'voice', audioData}, res => { if(!res?.success) console.error('Voice group send failed:', res); });
         };
         r.readAsDataURL(blob);
         stream.getTracks().forEach(t => t.stop());
@@ -893,11 +900,11 @@ export default function WhisprPro() {
   };
   const stopRecording = () => { mediaRecorderRef.current?.stop(); clearInterval(recordingTimerRef.current); setIsRecording(false); setRecordingTime(0); };
   const toggleAudio = (id,data)=>{if(playingAudio===id){setPlayingAudio(null);return;}setPlayingAudio(id);const a=new Audio(data);a.onended=()=>setPlayingAudio(null);a.play();};
-  const handleReaction = (mid,emoji)=>{socket.emit('add_reaction',{messageId:mid,emoji},()=>{});setHoveredMsg(null);};
-  const handleCreateGroup = e=>{e.preventDefault();if(!newGroupName.trim())return;socket.emit('create_group',{name:newGroupName,description:newGroupDesc,members:selectedMembers},res=>{if(res.success){setShowCreateGroup(false);setNewGroupName('');setNewGroupDesc('');setSelectedMembers([]);openGroupChat(res.group);}});};
-  const handleLeaveGroup = ()=>{if(!confirm('Покинуть группу?'))return;socket.emit('leave_group',activeChat.id,res=>{if(res.success){setGroups(p=>p.filter(g=>g._id!==activeChat.id));setActiveChat(null);setShowGroupInfo(false);}});};
-  const searchAddMember = q=>{setAddMemberQuery(q);if(q.length<2){setAddMemberResults([]);return;}socket.emit('search_users',q,res=>{if(res.success)setAddMemberResults(res.results);});};
-  const handleAddMember = u=>{socket.emit('group_add_member',{groupId:activeChat.id,username:u},res=>{if(res.success){setGroups(p=>p.map(g=>g._id===activeChat.id?res.group:g));setActiveChat(p=>p?{...p,data:res.group}:p);setAddMemberQuery('');setAddMemberResults([]);}else alert(res.error);});};
+  const handleReaction = (mid,emoji)=>{socketRef.current?.emit('add_reaction',{messageId:mid,emoji},()=>{});setHoveredMsg(null);};
+  const handleCreateGroup = e=>{e.preventDefault();if(!newGroupName.trim())return;socketRef.current?.emit('create_group',{name:newGroupName,description:newGroupDesc,members:selectedMembers},res=>{if(res.success){setShowCreateGroup(false);setNewGroupName('');setNewGroupDesc('');setSelectedMembers([]);openGroupChat(res.group);}});};
+  const handleLeaveGroup = ()=>{if(!confirm('Покинуть группу?'))return;socketRef.current?.emit('leave_group',activeChat.id,res=>{if(res.success){setGroups(p=>p.filter(g=>g._id!==activeChat.id));setActiveChat(null);setShowGroupInfo(false);}});};
+  const searchAddMember = q=>{setAddMemberQuery(q);if(q.length<2){setAddMemberResults([]);return;}socketRef.current?.emit('search_users',q,res=>{if(res.success)setAddMemberResults(res.results);});};
+  const handleAddMember = u=>{socketRef.current?.emit('group_add_member',{groupId:activeChat.id,username:u},res=>{if(res.success){setGroups(p=>p.map(g=>g._id===activeChat.id?res.group:g));setActiveChat(p=>p?{...p,data:res.group}:p);setAddMemberQuery('');setAddMemberResults([]);}else alert(res.error);});};
   const loadAdminData = (search='')=>{
     const s = socketRef.current;
     if (!s) return;
@@ -914,14 +921,14 @@ export default function WhisprPro() {
     if (!activeChat) return;
     setMsgSearchLoading(true);
     const chatKey = activeChat.type==='group' ? `group_${activeChat.id}` : activeChat.id;
-    socket.emit('search_messages', {chatKey, query:q}, res => {
+    socketRef.current?.emit('search_messages', {chatKey, query:q}, res => {
       setMsgSearchLoading(false);
       if (res.success) setMsgSearchResults(res.results);
     });
   };
 
   const handleBlockUser = (username, block) => {
-    socket.emit('block_user', {target: username, block}, res => {
+    socketRef.current?.emit('block_user', {target: username, block}, res => {
       if (res.success) {
         setContacts(p => p.map(c => c.username===username ? {...c, isBlockedByMe: block} : c));
       }
@@ -932,7 +939,7 @@ export default function WhisprPro() {
 
   const handleViewProfile = (username) => {
     if (!socket || !username) return;
-    socket.emit('get_user_profile', username, res => {
+    socketRef.current?.emit('get_user_profile', username, res => {
       if (res.success) setViewingProfile(res.profile);
       else console.warn('Profile error:', res.error);
     });
@@ -947,7 +954,7 @@ export default function WhisprPro() {
       username: channelForm.username.trim() || null,
       description: channelForm.description.trim(),
     };
-    socket.emit('create_channel', payload, res => {
+    socketRef.current?.emit('create_channel', payload, res => {
       if (!res) { alert('Нет ответа от сервера'); return; }
       if (res.success) {
         setChannels(p => [...p, res.channel]);
@@ -962,7 +969,7 @@ export default function WhisprPro() {
 
   const handleUpdateChannel = (e) => {
     e.preventDefault();
-    socket.emit('update_channel', {channelId: editingChannel._id, ...channelSettingsForm}, res => {
+    socketRef.current?.emit('update_channel', {channelId: editingChannel._id, ...channelSettingsForm}, res => {
       if (res.success) {
         setChannels(p => p.map(x => x._id===res.channel._id ? res.channel : x));
         setShowChannelSettings(false);
@@ -973,13 +980,13 @@ export default function WhisprPro() {
   const handleSearchChannels = (q) => {
     setChannelSearch(q);
     if (q.length < 2) { setChannelSearchResults([]); return; }
-    socket.emit('search_channels', q, res => {
+    socketRef.current?.emit('search_channels', q, res => {
       if (res.success) setChannelSearchResults(res.channels);
     });
   };
 
   const loadCallHistory = (withUser) => {
-    socket.emit('get_call_history', {withUser}, res => {
+    socketRef.current?.emit('get_call_history', {withUser}, res => {
       if (res.success) setCallHistory(res.logs);
     });
   };
@@ -1056,8 +1063,8 @@ export default function WhisprPro() {
           const chat = activeChatRef.current;
           if (!chat) return;
           const videoData = r.result;
-          if (chat.type==='direct') socket.emit('send_message',{to:chat.id,text:'',type:'video',audioData:videoData}, res=>{ if(!res?.success) console.error('Video send failed:', res); });
-          else if (chat.type==='group') socket.emit('send_group_message',{groupId:chat.id,text:'',type:'video',audioData:videoData}, res=>{ if(!res?.success) console.error('Video group send failed:', res); });
+          if (chat.type==='direct') socketRef.current?.emit('send_message',{to:chat.id,text:'',type:'video',audioData:videoData}, res=>{ if(!res?.success) console.error('Video send failed:', res); });
+          else if (chat.type==='group') socketRef.current?.emit('send_group_message',{groupId:chat.id,text:'',type:'video',audioData:videoData}, res=>{ if(!res?.success) console.error('Video group send failed:', res); });
         };
         r.readAsDataURL(blob);
         stream.getTracks().forEach(t=>t.stop());
@@ -1125,9 +1132,9 @@ export default function WhisprPro() {
     const chat = activeChatRef.current;
     if (!chat || !socket) return;
     const payload = { text: emoji, type: 'sticker' };
-    if (chat.type==='direct') socket.emit('send_message', {to:chat.id, ...payload}, ()=>{});
-    else if (chat.type==='group') socket.emit('send_group_message', {groupId:chat.id, ...payload}, ()=>{});
-    else if (chat.type==='channel') socket.emit('send_channel_message', {channelId:chat.id, ...payload}, ()=>{});
+    if (chat.type==='direct') socketRef.current?.emit('send_message', {to:chat.id, ...payload}, ()=>{});
+    else if (chat.type==='group') socketRef.current?.emit('send_group_message', {groupId:chat.id, ...payload}, ()=>{});
+    else if (chat.type==='channel') socketRef.current?.emit('send_channel_message', {channelId:chat.id, ...payload}, ()=>{});
     setShowStickerPanel(false);
   };
 
@@ -1135,9 +1142,9 @@ export default function WhisprPro() {
     const chat = activeChatRef.current;
     if (!chat || !socket) return;
     const payload = { text: gif.title||'GIF', type: 'gif', audioData: gif.full };
-    if (chat.type==='direct') socket.emit('send_message', {to:chat.id, ...payload}, ()=>{});
-    else if (chat.type==='group') socket.emit('send_group_message', {groupId:chat.id, ...payload}, ()=>{});
-    else if (chat.type==='channel') socket.emit('send_channel_message', {channelId:chat.id, ...payload}, ()=>{});
+    if (chat.type==='direct') socketRef.current?.emit('send_message', {to:chat.id, ...payload}, ()=>{});
+    else if (chat.type==='group') socketRef.current?.emit('send_group_message', {groupId:chat.id, ...payload}, ()=>{});
+    else if (chat.type==='channel') socketRef.current?.emit('send_channel_message', {channelId:chat.id, ...payload}, ()=>{});
     setShowStickerPanel(false);
   };
 
@@ -1223,9 +1230,9 @@ export default function WhisprPro() {
       setTimeout(() => { setSendingFile(false); setSendProgress(0); }, 400);
       if (!res?.success) alert('Ошибка отправки файла');
     };
-    if (chat.type==='direct') socket.emit('send_message', {to:chat.id, ...payload}, cb);
-    else if (chat.type==='group') socket.emit('send_group_message', {groupId:chat.id, ...payload}, cb);
-    else if (chat.type==='channel') socket.emit('send_channel_message', {channelId:chat.id, ...payload}, cb);
+    if (chat.type==='direct') socketRef.current?.emit('send_message', {to:chat.id, ...payload}, cb);
+    else if (chat.type==='group') socketRef.current?.emit('send_group_message', {groupId:chat.id, ...payload}, cb);
+    else if (chat.type==='channel') socketRef.current?.emit('send_channel_message', {channelId:chat.id, ...payload}, cb);
     setImagePreview(null);
     setFilePreview(null);
   };
@@ -1234,7 +1241,7 @@ export default function WhisprPro() {
     if (!activeChat || activeChat.type !== 'group') return;
     const mid = msg._id || msg.id;
     const alreadyPinned = pinnedMessage?.[activeChat.id]?._id === mid;
-    socket.emit('pin_message', {groupId: activeChat.id, messageId: alreadyPinned ? null : mid}, res => {
+    socketRef.current?.emit('pin_message', {groupId: activeChat.id, messageId: alreadyPinned ? null : mid}, res => {
       if (res.success) {
         setPinnedMessage(p => ({...p, [activeChat.id]: alreadyPinned ? null : msg}));
       }
@@ -2025,7 +2032,7 @@ export default function WhisprPro() {
                           const existing = channels.find(x=>x._id===ch._id)||{...ch,subscribers:[],members:[]};
                           openChannelChat(existing); setShowSearch(false);
                         } else {
-                          socket.emit('subscribe_channel', ch._id, res => {
+                          socketRef.current?.emit('subscribe_channel', ch._id, res => {
                             if (res.success) { setChannels(p=>[...p,res.channel]); openChannelChat(res.channel); setShowSearch(false); }
                           });
                         }
