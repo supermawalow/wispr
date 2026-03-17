@@ -91,30 +91,6 @@ function WhisprLogo({ size = 'xl', theme }) {
   );
 }
 
-function ExpiryTimer({ expiresAt }) {
-  const [left, setLeft] = React.useState(Math.max(0, Math.floor((new Date(expiresAt) - Date.now()) / 1000)));
-  React.useEffect(() => {
-    if (left <= 0) return;
-    const t = setInterval(() => setLeft(s => Math.max(0, s - 1)), 1000);
-    return () => clearInterval(t);
-  }, []);
-  if (left <= 0) return null;
-  const fmt = left < 60 ? `${left}с` : left < 3600 ? `${Math.ceil(left/60)}м` : `${Math.ceil(left/3600)}ч`;
-  const pct = Math.max(0, left / Math.floor((new Date(expiresAt) - (new Date(expiresAt) - left*1000)) / 1000) * 100);
-  const color = left < 30 ? '#ef4444' : left < 300 ? '#f59e0b' : '#3b82f6';
-  return (
-    <span className="flex items-center gap-0.5 ml-0.5" title={`Исчезнет через ${fmt}`}>
-      <svg width="10" height="10" viewBox="0 0 10 10">
-        <circle cx="5" cy="5" r="4" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1.5"/>
-        <circle cx="5" cy="5" r="4" fill="none" stroke={color} strokeWidth="1.5"
-          strokeDasharray={`${2*Math.PI*4}`}
-          strokeDashoffset={`${2*Math.PI*4*(1-left/86400)}`}
-          strokeLinecap="round" transform="rotate(-90 5 5)"/>
-      </svg>
-      <span style={{fontSize:'9px',color,fontVariantNumeric:'tabular-nums'}}>{fmt}</span>
-    </span>
-  );
-}
 
 function VerifiedBadge({ size = 'sm', gold = false }) {
   const s = size === 'lg' ? 16 : size === 'md' ? 13 : 11;
@@ -416,9 +392,6 @@ export default function WhisprPro() {
   const [msgSearchResults, setMsgSearchResults] = useState([]);
   const [msgSearchLoading, setMsgSearchLoading] = useState(false);
   const [replyTo, setReplyTo] = useState(null); // {_id, from, text, type}
-  const [msgTtl, setMsgTtl] = useState(0);
-  const [showTtlPicker, setShowTtlPicker] = useState(false);
-  const pendingMsgRef = useRef(null); // повтор после session_expired
   const [drafts, setDrafts] = useState({});
   const [mentionQuery, setMentionQuery] = useState(''); // текущий @query
   const [mentionList, setMentionList] = useState([]); // подходящие участники // { chatKey: text }
@@ -707,12 +680,7 @@ export default function WhisprPro() {
               sock.emit('admin_get_users', {search:''}, r=>{if(r.success)setAllUsers(r.users);});
               sock.emit('admin_get_logs', r=>{if(r.success)setAdminLogs(r.logs);});
             }
-            // Повторяем отправку если было pending сообщение
-            const pending = pendingMsgRef.current;
-            if (pending) {
-              pendingMsgRef.current = null;
-              setTimeout(() => doSend(sock, pending.chat, pending.msg, pending.replyData, pending.ttl), 300);
-            }
+
           }
         });
       } catch(e) { /* ignore */ }
@@ -780,7 +748,7 @@ export default function WhisprPro() {
   const chatMessages = chatKey?(messages[chatKey]||[]):[];
   const prevMsgCount = useRef(0);
   useEffect(()=>{if(chatMessages.length>prevMsgCount.current)messagesEndRef.current?.scrollIntoView({behavior:'smooth'});prevMsgCount.current=chatMessages.length;},[chatMessages.length]);
-  useEffect(()=>{const h=()=>{setMsgMenu(null);setShowStickerPanel(false);setShowTtlPicker(false);};document.addEventListener('click',h);return()=>document.removeEventListener('click',h);},[]);
+  useEffect(()=>{const h=()=>{setMsgMenu(null);setShowStickerPanel(false);};document.addEventListener('click',h);return()=>document.removeEventListener('click',h);},[]);
 
   // Плавный переход чата
   useEffect(()=>{if(activeChat){setChatVisible(false);setTimeout(()=>setChatVisible(true),50);}},[activeChat?.id]);
@@ -868,12 +836,11 @@ export default function WhisprPro() {
     // Загрузить закреплённое
     socketRef.current?.emit('get_pinned_message', g._id, res=>{if(res.success&&res.message)setPinnedMessage(p=>({...p,[g._id]:res.message}));});
   };
-  const doSend = (s, chat, msg, replyData, ttl=0) => {
-    const ttlData = ttl > 0 ? {ttl} : {};
-    if (chat.type==='direct') s.emit('send_message', {to:chat.id, text:msg, type:'text', ...replyData, ...ttlData}, res=>{
+  const doSend = (s, chat, msg, replyData) => {
+    if (chat.type==='direct') s.emit('send_message', {to:chat.id, text:msg, type:'text', ...replyData}, res=>{
       if (res&&!res.success) console.error('send_message error:', res.error);
     });
-    else if (chat.type==='group') s.emit('send_group_message', {groupId:chat.id, text:msg, type:'text', ...replyData, ...ttlData}, res=>{
+    else if (chat.type==='group') s.emit('send_group_message', {groupId:chat.id, text:msg, type:'text', ...replyData}, res=>{
       if (res&&!res.success) console.error('send_group_message error:', res.error);
     });
     else if (chat.type==='channel') s.emit('send_channel_message', {channelId:chat.id, text:msg, type:'text'}, res=>{
@@ -888,12 +855,8 @@ export default function WhisprPro() {
     const replyData = replyTo ? {replyToId:replyTo._id, replyFrom:replyTo.from, replyText:replyTo.type==='voice'?'🎤 Голосовое':replyTo.type==='video'?'📹 Видео':replyTo.text} : {};
     const s = socketRef.current;
     const chat = activeChatRef.current;
-    // Сохраняем в очередь на случай session_expired
-    pendingMsgRef.current = {chat, msg, replyData, ttl: msgTtl};
-    doSend(s, chat, msg, replyData, msgTtl);
+    doSend(s, chat, msg, replyData);
     setText(''); setReplyTo(null);
-    // Очищаем pending после успешной отправки (через 3 сек)
-    setTimeout(() => { pendingMsgRef.current = null; }, 3000);
     const key = getChatKey(activeChatRef.current);
     if (key) { draftsRef.current[key]=''; setDrafts(p=>({...p,[key]:''})); }
   };
@@ -1431,11 +1394,11 @@ export default function WhisprPro() {
                 transform:'none',transition:'all 0.15s ease',
                 animation:`listItem 0.3s ease ${i*0.04}s both`,
               }}>
-              <Avatar username={c.username} displayName={c.displayName} avatar={avatars[c.username]} size="sm" online={c.isOnline} />
+              <Avatar username={c.username} displayName={c.displayName} avatar={c.isBlockedByMe ? null : avatars[c.username]} size="sm" online={c.isBlockedByMe ? false : c.isOnline} />
               <div className="flex-1 min-w-0">
                 <div className={`text-sm font-medium truncate flex items-center gap-1 ${activeChat?.type==='direct'&&activeChat.id===c.username?'text-white':'text-white/60'}`}>{c.displayName}{c.verified&&<VerifiedBadge/>}</div>
                 {drafts[c.username]&&activeChat?.id!==c.username&&<div className="text-xs text-white/25 truncate flex items-center gap-1"><span style={{color:T.a,fontSize:'10px'}}>Черновик:</span>{drafts[c.username]}</div>}
-                <div className="text-xs text-white/20 truncate">@{c.username}</div>
+                <div className="text-xs text-white/20 truncate">{c.isBlockedByMe ? <span className="text-red-400/40">заблокирован</span> : `@${c.username}`}</div>
               </div>
               {(unreadCounts[c.username]||0)>0 && <span className="flex-shrink-0 min-w-[18px] h-[18px] rounded-full text-[10px] font-bold text-white flex items-center justify-center px-1" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{unreadCounts[c.username]}</span>}
               <button onClick={e=>{e.stopPropagation();handleRemoveContact(c.username);}} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-white/10 rounded-lg transition-all flex-shrink-0"><X className="w-3 h-3 text-white/30" /></button>
@@ -1488,14 +1451,16 @@ export default function WhisprPro() {
             {/* Header */}
             <div className="flex-shrink-0 flex items-center gap-3 px-5 py-4" style={{borderBottom:'1px solid rgba(255,255,255,0.05)',background:'rgba(0,0,0,0.2)'}}>
               <button onClick={()=>setShowSidebar(s=>!s)} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors flex-shrink-0" title="Боковая панель"><Menu className="w-5 h-5 text-white/30 hover:text-white/60 transition-colors" /></button>
-              {activeChat.type==='direct'?<div className="cursor-pointer hover:opacity-80 transition-opacity" onClick={()=>handleViewProfile(activeChat.id)}><Avatar username={activeChatData?.username} displayName={activeChatData?.displayName} avatar={avatars[activeChatData?.username]} size="md" online={activeChatData?.isOnline}/></div>:activeChat.type==='channel'?<div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{activeChatData?.avatar?<img src={activeChatData.avatar} className="w-full h-full rounded-full object-cover" alt=""/>:<Radio className="w-5 h-5 text-white"/>}</div>:<GroupAvatar group={activeChatData} size="md"/>}
+              {activeChat.type==='direct'?<div className="cursor-pointer hover:opacity-80 transition-opacity" onClick={()=>handleViewProfile(activeChat.id)}><Avatar username={activeChatData?.username} displayName={activeChatData?.displayName} avatar={activeChatData?.isBlockedByMe ? null : avatars[activeChatData?.username]} size="md" online={activeChatData?.isBlockedByMe ? false : activeChatData?.isOnline}/></div>:activeChat.type==='channel'?<div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{activeChatData?.avatar?<img src={activeChatData.avatar} className="w-full h-full rounded-full object-cover" alt=""/>:<Radio className="w-5 h-5 text-white"/>}</div>:<GroupAvatar group={activeChatData} size="md"/>}
               <div className="flex-1 min-w-0">
                 <div className="text-white/90 font-semibold truncate flex items-center gap-1">{activeChat.type==='direct'?activeChatData?.displayName:activeChatData?.name}{activeChatData?.verified&&<VerifiedBadge size="md"/>}</div>
                 <div className="text-xs text-white/25">
                   {activeChat.type==='direct'
-                    ? (activeChatData?.isOnline
-                      ? <span style={{color:'#4ade80',fontSize:'12px'}} className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0"></span>онлайн</span>
-                      : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>не в сети</span>)
+                    ? activeChatData?.isBlockedByMe
+                      ? <span style={{color:'rgba(239,68,68,0.4)',fontSize:'12px'}}>заблокирован</span>
+                      : (activeChatData?.isOnline
+                        ? <span style={{color:'#4ade80',fontSize:'12px'}} className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0"></span>онлайн</span>
+                        : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>не в сети</span>)
                     : activeChat.type==='channel'
                     ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>📢 Канал · {activeChatData?.subscribers?.length||0} подп.</span>
                     : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>{activeChatData?.members?.length||0} участников</span>}
@@ -1711,7 +1676,6 @@ export default function WhisprPro() {
                           )}
                           <div className="flex items-center justify-end gap-1 mt-0.5">
                             {msg.edited&&<span className="text-[10px] text-white/25">ред.</span>}
-                            {msg.expiresAt&&<ExpiryTimer expiresAt={msg.expiresAt}/>}
                             <span className="text-[10px] text-white/25">{fmtTime(msg.timestamp)}</span>
                             
                             {isOwn&&activeChat.type==='direct'&&<span className="text-[10px]">{msg.read?<span className="text-blue-300/70">✓✓</span>:msg.delivered?<span className="text-white/25">✓✓</span>:<span className="text-white/15">✓</span>}</span>}
@@ -1752,13 +1716,6 @@ export default function WhisprPro() {
                       <span className="text-white/70 text-sm">@{m}</span>
                     </button>
                   ))}
-                </div>
-              )}
-              {msgTtl>0&&(
-                <div className="flex items-center gap-2 mb-2 px-3 py-1.5 rounded-xl" style={{background:'rgba(255,255,255,0.04)',border:`1px solid ${T.a}30`}}>
-                  <Clock className="w-3.5 h-3.5 flex-shrink-0" style={{color:T.a}}/>
-                  <span className="text-xs flex-1" style={{color:T.a}}>Сообщение исчезнет через {msgTtl>=3600?`${msgTtl/3600}ч`:msgTtl>=60?`${msgTtl/60}мин`:`${msgTtl}с`}</span>
-                  <button onClick={()=>setMsgTtl(0)} className="p-0.5 rounded hover:bg-white/5 flex-shrink-0"><X className="w-3 h-3 text-white/30"/></button>
                 </div>
               )}
               {imagePreview&&(
@@ -1914,30 +1871,6 @@ export default function WhisprPro() {
                   </div>
                   <button type="button" onClick={startRecording} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}}><Mic className="w-5 h-5 text-white/25"/></button>
                   <button type="button" onClick={startVideoRecording} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Видео-сообщение"><Video className="w-5 h-5 text-white/25"/></button>
-                  {/* ── Таймер исчезающего сообщения ── */}
-                  <div className="relative flex-shrink-0">
-                    <button type="button" onClick={e=>{e.stopPropagation();setShowTtlPicker(p=>!p);}}
-                      className="p-3 rounded-2xl hover:bg-white/5 transition-colors"
-                      style={{border:`1px solid ${msgTtl>0?`${T.a}60`:'rgba(255,255,255,0.06)'}`,background:msgTtl>0?`${T.a}15`:'transparent'}}
-                      title="Исчезающее сообщение">
-                      <Clock className="w-5 h-5" style={{color:msgTtl>0?T.a:'rgba(255,255,255,0.25)'}}/>
-                    </button>
-                    {showTtlPicker&&(
-                      <div className="absolute bottom-14 right-0 rounded-2xl overflow-hidden shadow-2xl z-50 w-44"
-                        style={{background:'rgba(12,12,20,0.98)',border:'1px solid rgba(255,255,255,0.08)',animation:'popIn 0.15s ease'}}
-                        onClick={e=>e.stopPropagation()}>
-                        <div className="px-3 pt-3 pb-1 text-[10px] font-semibold text-white/20 uppercase tracking-wider">Исчезнет через</div>
-                        {[[0,'Выкл.'],[30,'30 секунд'],[60,'1 минуту'],[300,'5 минут'],[3600,'1 час'],[86400,'24 часа']].map(([val,label])=>(
-                          <button key={val} onClick={()=>{setMsgTtl(val);setShowTtlPicker(false);}}
-                            className="w-full px-4 py-2.5 text-left text-sm transition-colors flex items-center justify-between"
-                            style={{color:msgTtl===val?T.a:'rgba(255,255,255,0.6)',background:msgTtl===val?`${T.a}15`:'transparent'}}>
-                            {label}
-                            {msgTtl===val&&<span style={{color:T.a}}>✓</span>}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
                   <button type="submit" className="px-5 py-3 rounded-2xl font-medium text-white text-sm flex items-center gap-2 flex-shrink-0 transition-all hover:opacity-85 active:scale-95"
                     style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}><Send className="w-4 h-4"/></button>
                 </form>
