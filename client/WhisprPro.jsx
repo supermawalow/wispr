@@ -312,6 +312,8 @@ export default function WhisprPro() {
   const savedCredsRef = useRef(null);
   const [displayName, setDisplayName] = useState('');
   const [authError, setAuthError] = useState('');
+  const [toast, setToast] = useState(null); // {msg, type}
+  const showToast = (msg, type='error') => { setToast({msg,type}); setTimeout(()=>setToast(null), 4000); };
 
   const [contacts, setContacts] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -837,14 +839,19 @@ export default function WhisprPro() {
     socketRef.current?.emit('get_pinned_message', g._id, res=>{if(res.success&&res.message)setPinnedMessage(p=>({...p,[g._id]:res.message}));});
   };
   const doSend = (s, chat, msg, replyData) => {
+    if (!s) { showToast('Нет соединения с сервером'); return; }
+    if (!chat) { showToast('Чат не выбран'); return; }
     if (chat.type==='direct') s.emit('send_message', {to:chat.id, text:msg, type:'text', ...replyData}, res=>{
-      if (res&&!res.success) console.error('send_message error:', res.error);
+      if (!res) { showToast('Сервер не ответил — попробуй ещё раз'); return; }
+      if (!res.success) showToast('Ошибка: ' + res.error);
     });
     else if (chat.type==='group') s.emit('send_group_message', {groupId:chat.id, text:msg, type:'text', ...replyData}, res=>{
-      if (res&&!res.success) console.error('send_group_message error:', res.error);
+      if (!res) { showToast('Сервер не ответил — попробуй ещё раз'); return; }
+      if (!res.success) showToast('Ошибка: ' + res.error);
     });
     else if (chat.type==='channel') s.emit('send_channel_message', {channelId:chat.id, text:msg, type:'text'}, res=>{
-      if (res&&!res.success) console.error('send_channel_message error:', res.error);
+      if (!res) { showToast('Сервер не ответил — попробуй ещё раз'); return; }
+      if (!res.success) showToast('Ошибка: ' + res.error);
     });
   };
 
@@ -1702,6 +1709,11 @@ export default function WhisprPro() {
 
             {/* Input */}
             <div className="flex-shrink-0 px-4 py-4" style={{borderTop:'1px solid rgba(255,255,255,0.05)',background:'rgba(0,0,0,0.15)'}}>
+              {activeChat.type==='channel' && !activeChatData?.admins?.includes(currentUser?.username) && activeChatData?.owner !== currentUser?.username ? (
+                <div className="flex items-center justify-center py-2">
+                  <span className="text-white/20 text-sm">📢 Только администраторы могут писать в канал</span>
+                </div>
+              ) : (<>
               {mentionList.length>0&&(
                 <div className="mb-2 rounded-xl overflow-hidden" style={{background:'rgba(10,10,14,0.98)',border:'1px solid rgba(255,255,255,0.08)'}}>
                   {mentionList.map(m=>(
@@ -1875,6 +1887,7 @@ export default function WhisprPro() {
                     style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}><Send className="w-4 h-4"/></button>
                 </form>
               )}
+              </>)}
             </div>
           </div>
         ):(
@@ -2223,18 +2236,24 @@ export default function WhisprPro() {
             </div>
             {/* Аватар + имя */}
             <div className="flex flex-col items-center mb-6">
-              <Avatar username={viewingProfile.username} displayName={viewingProfile.displayName} avatar={viewingProfile.avatar} size="lg"/>
+              <Avatar username={viewingProfile.username} displayName={viewingProfile.displayName}
+                avatar={viewingProfile.isBlockedByMe ? null : viewingProfile.avatar} size="lg"/>
               <div className="mt-3 text-center">
                 <div className="text-white font-bold text-xl">{viewingProfile.displayName}</div>
                 <div className="text-white/30 text-sm">@{viewingProfile.username}</div>
                 <div className="flex items-center justify-center gap-1.5 mt-1.5">
-                  {viewingProfile.isOnline&&<><span className="w-2 h-2 rounded-full bg-green-400"></span><span className="text-green-400 text-xs">онлайн</span></>}
-                  {!viewingProfile.isOnline&&<><span className="w-2 h-2 rounded-full bg-gray-600"></span><span className="text-white/25 text-xs">не в сети</span></>}
+                  {viewingProfile.isBlockedByMe ? (
+                    <span className="text-red-400/50 text-xs">вы заблокировали</span>
+                  ) : viewingProfile.isOnline ? (
+                    <><span className="w-2 h-2 rounded-full bg-green-400"></span><span className="text-green-400 text-xs">онлайн</span></>
+                  ) : (
+                    <><span className="w-2 h-2 rounded-full bg-gray-600"></span><span className="text-white/25 text-xs">не в сети</span></>
+                  )}
                 </div>
               </div>
             </div>
-            {/* Bio */}
-            {viewingProfile.bio && (
+            {/* Bio — скрываем если заблокирован */}
+            {viewingProfile.bio && !viewingProfile.isBlockedByMe && (
               <div className="mb-4 px-4 py-3 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
                 <div className="text-[10px] text-white/20 uppercase tracking-widest mb-1">О себе</div>
                 <div className="text-white/70 text-sm leading-relaxed">{viewingProfile.bio}</div>
@@ -2410,6 +2429,14 @@ export default function WhisprPro() {
       {/* ══ CALLS ══ */}
       {callState==='incoming'&&<IncomingCallOverlay from={callPeer} fromDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} fromAvatar={avatars[callPeer]} onAccept={acceptCall} onReject={rejectCall}/>}
       {(callState==='calling'||callState==='active')&&<ActiveCallOverlay peer={callPeer} peerDisplay={contacts.find(c=>c.username===callPeer)?.displayName||callPeer} peerAvatar={avatars[callPeer]} duration={callDuration} muted={callMuted} onMute={toggleMute} onEnd={endCall} calling={callState==='calling'} localStream={localStreamState} remoteStream={remoteStreamState} callType={callType}/>}
+
+      {/* ── TOAST ── */}
+      {toast&&(
+        <div className="fixed bottom-16 left-1/2 z-[9999] px-4 py-2.5 rounded-xl text-sm font-medium text-white shadow-2xl"
+          style={{transform:'translateX(-50%)',background:toast.type==='error'?'rgba(239,68,68,0.92)':'rgba(34,197,94,0.92)',backdropFilter:'blur(8px)',animation:'slideUp 0.2s ease',whiteSpace:'nowrap'}}>
+          {toast.msg}
+        </div>
+      )}
 
       {/* ── LIGHTBOX — полноэкранный просмотр фото ── */}
       {lightbox&&(
