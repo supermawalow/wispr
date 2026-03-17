@@ -71,7 +71,8 @@ const messageSchema = new mongoose.Schema({
   replyText:     { type: String, default: null },
   fileName:      { type: String, default: null },
   fileMime:      { type: String, default: null },
-  linkPreview:   { type: Object, default: null } // {url,title,desc,image}
+  linkPreview:   { type: Object, default: null }, // {url,title,desc,image}
+  expiresAt:     { type: Date, default: null }     // исчезающие сообщения
 });
 
 const adminLogSchema = new mongoose.Schema({
@@ -129,6 +130,26 @@ mongoose.connection.once('open', async () => {
     console.log('👑 Admin пароль обновлён');
   }
 });
+
+// ── Автоудаление исчезающих сообщений (каждую минуту) ──
+setInterval(async () => {
+  try {
+    const expired = await Message.find({ expiresAt: { $lte: new Date(), $ne: null } });
+    for (const msg of expired) {
+      const update = { messageId: msg._id };
+      if (msg.chatType === 'group') {
+        const group = await Group.findById(msg.groupId);
+        if (group) group.members.forEach(m => { const s = userSockets.get(m); if (s) io.to(s).emit('message_deleted', update); });
+      } else {
+        const s1 = userSockets.get(msg.from);
+        const s2 = userSockets.get(msg.to);
+        if (s1) io.to(s1).emit('message_deleted', update);
+        if (s2) io.to(s2).emit('message_deleted', update);
+      }
+      await msg.deleteOne();
+    }
+  } catch(e) { console.error('Cleanup error:', e.message); }
+}, 60 * 1000);
 
 const onlineUsers = new Map(); // socketId -> username
 const userSockets = new Map(); // username -> socketId
@@ -290,20 +311,22 @@ io.on('connection', (socket) => {
   socket.on('send_message', async (data, cb) => {
     const me = requireAuth(cb); if (!me) return;
     try {
-      const { to, text, type, audioData, replyToId, replyFrom, replyText } = data;
+      const { to, text, type, audioData, replyToId, replyFrom, replyText, ttl } = data;
       const meUser = await User.findOne({ username: me });
       if (!meUser) { socket.emit('session_expired'); return cb({ success: false, error: 'Пользователь не найден' }); }
       if (meUser.blockedUsers?.includes(to.toLowerCase())) return cb({ success: false, error: 'Вы заблокировали этого пользователя' });
       const toUser = await User.findOne({ username: to.toLowerCase() });
       if (toUser?.blockedUsers?.includes(me)) return cb({ success: false, error: 'Вы заблокированы этим пользователем' });
       const recipientSocket = userSockets.get(to.toLowerCase());
+      const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
       const msg = await Message.create({
         chatId: getChatId(me, to.toLowerCase()), chatType: 'direct',
         from: me, to: to.toLowerCase(),
         text: text || '', type: type || 'text', audioData: audioData || null,
         delivered: !!recipientSocket, read: false,
         replyToId: replyToId || null, replyFrom: replyFrom || null, replyText: replyText || null,
-        fileName: data.fileName || null, fileMime: data.fileMime || null
+        fileName: data.fileName || null, fileMime: data.fileMime || null,
+        expiresAt
       });
       socket.emit('new_message', msg);
       if (recipientSocket) io.to(recipientSocket).emit('new_message', msg);
@@ -352,16 +375,17 @@ io.on('connection', (socket) => {
   socket.on('send_group_message', async (data, cb) => {
     const me = requireAuth(cb); if (!me) return;
     try {
-      const { groupId, text, type, audioData, replyToId, replyFrom, replyText } = data;
+      const { groupId, text, type, audioData, replyToId, replyFrom, replyText, ttl } = data;
       const group = await Group.findById(groupId);
       if (!group) return cb({ success: false, error: 'Группа не найдена' });
       if (!group.members.includes(me)) return cb({ success: false, error: 'Нет доступа' });
+      const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
       const msg = await Message.create({
         chatId: getGroupChatId(groupId), chatType: 'group',
         from: me, to: '', groupId,
         text: text || '', type: type || 'text', audioData: audioData || null,
         replyToId: replyToId || null, replyFrom: replyFrom || null, replyText: replyText || null,
-        delivered: true, read: false
+        delivered: true, read: false, expiresAt
       });
       // Рассылаем всем участникам группы
       for (const member of group.members) {
@@ -609,15 +633,18 @@ io.on('connection', (socket) => {
     try {
       const user = await User.findOne({ username: username.toLowerCase() });
       if (!user) return cb({ success: false, error: 'Не найден' });
+      const meUser = await User.findOne({ username: me });
       const isOnline = userSockets.has(user.username);
       cb({ success: true, profile: {
         username: user.username,
         displayName: user.displayName,
         avatar: user.avatar,
         bio: user.bio || '',
+        verified: user.verified || false,
         status: user.hideOnline ? 'hidden' : (isOnline ? (user.status || 'online') : 'offline'),
         createdAt: user.createdAt,
         isOnline: user.hideOnline ? false : isOnline,
+        isBlockedByMe: (meUser?.blockedUsers||[]).includes(user.username),
       }});
     } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
   });

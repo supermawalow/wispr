@@ -91,6 +91,50 @@ function WhisprLogo({ size = 'xl', theme }) {
   );
 }
 
+function ExpiryTimer({ expiresAt }) {
+  const [left, setLeft] = React.useState(Math.max(0, Math.floor((new Date(expiresAt) - Date.now()) / 1000)));
+  React.useEffect(() => {
+    if (left <= 0) return;
+    const t = setInterval(() => setLeft(s => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (left <= 0) return null;
+  const fmt = left < 60 ? `${left}с` : left < 3600 ? `${Math.ceil(left/60)}м` : `${Math.ceil(left/3600)}ч`;
+  const pct = Math.max(0, left / Math.floor((new Date(expiresAt) - (new Date(expiresAt) - left*1000)) / 1000) * 100);
+  const color = left < 30 ? '#ef4444' : left < 300 ? '#f59e0b' : '#3b82f6';
+  return (
+    <span className="flex items-center gap-0.5 ml-0.5" title={`Исчезнет через ${fmt}`}>
+      <svg width="10" height="10" viewBox="0 0 10 10">
+        <circle cx="5" cy="5" r="4" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="1.5"/>
+        <circle cx="5" cy="5" r="4" fill="none" stroke={color} strokeWidth="1.5"
+          strokeDasharray={`${2*Math.PI*4}`}
+          strokeDashoffset={`${2*Math.PI*4*(1-left/86400)}`}
+          strokeLinecap="round" transform="rotate(-90 5 5)"/>
+      </svg>
+      <span style={{fontSize:'9px',color,fontVariantNumeric:'tabular-nums'}}>{fmt}</span>
+    </span>
+  );
+}
+
+function ExpiryTimer({ expiresAt }) {
+  const [left, setLeft] = React.useState(0);
+  React.useEffect(() => {
+    const calc = () => Math.max(0, Math.ceil((new Date(expiresAt) - Date.now()) / 1000));
+    setLeft(calc());
+    const t = setInterval(() => setLeft(calc()), 1000);
+    return () => clearInterval(t);
+  }, [expiresAt]);
+  if (!expiresAt || left <= 0) return null;
+  const fmt = s => s >= 3600 ? `${Math.floor(s/3600)}ч` : s >= 60 ? `${Math.floor(s/60)}м` : `${s}с`;
+  const pct = Math.max(0, left / ((new Date(expiresAt) - new Date(expiresAt) + left*1000 + 1) / 1000) * 100);
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] opacity-60 ml-1" title="Исчезнет через">
+      <Clock style={{width:9,height:9,display:'inline'}}/>
+      {fmt(left)}
+    </span>
+  );
+}
+
 function VerifiedBadge({ size = 'sm', gold = false }) {
   const s = size === 'lg' ? 16 : size === 'md' ? 13 : 11;
   return (
@@ -391,6 +435,8 @@ export default function WhisprPro() {
   const [msgSearchResults, setMsgSearchResults] = useState([]);
   const [msgSearchLoading, setMsgSearchLoading] = useState(false);
   const [replyTo, setReplyTo] = useState(null); // {_id, from, text, type}
+  const [msgTtl, setMsgTtl] = useState(0); // 0 = нет, иначе секунды
+  const [showTtlPicker, setShowTtlPicker] = useState(false);
   const [drafts, setDrafts] = useState({});
   const [mentionQuery, setMentionQuery] = useState(''); // текущий @query
   const [mentionList, setMentionList] = useState([]); // подходящие участники // { chatKey: text }
@@ -748,7 +794,7 @@ export default function WhisprPro() {
   const chatMessages = chatKey?(messages[chatKey]||[]):[];
   const prevMsgCount = useRef(0);
   useEffect(()=>{if(chatMessages.length>prevMsgCount.current)messagesEndRef.current?.scrollIntoView({behavior:'smooth'});prevMsgCount.current=chatMessages.length;},[chatMessages.length]);
-  useEffect(()=>{const h=()=>{setMsgMenu(null);setShowStickerPanel(false);};document.addEventListener('click',h);return()=>document.removeEventListener('click',h);},[]);
+  useEffect(()=>{const h=()=>{setMsgMenu(null);setShowStickerPanel(false);setShowTtlPicker(false);};document.addEventListener('click',h);return()=>document.removeEventListener('click',h);},[]);
 
   // Плавный переход чата
   useEffect(()=>{if(activeChat){setChatVisible(false);setTimeout(()=>setChatVisible(true),50);}},[activeChat?.id]);
@@ -836,11 +882,12 @@ export default function WhisprPro() {
     // Загрузить закреплённое
     socketRef.current?.emit('get_pinned_message', g._id, res=>{if(res.success&&res.message)setPinnedMessage(p=>({...p,[g._id]:res.message}));});
   };
-  const doSend = (s, chat, msg, replyData) => {
-    if (chat.type==='direct') s.emit('send_message', {to:chat.id, text:msg, type:'text', ...replyData}, res=>{
+  const doSend = (s, chat, msg, replyData, ttl=0) => {
+    const ttlData = ttl > 0 ? {ttl} : {};
+    if (chat.type==='direct') s.emit('send_message', {to:chat.id, text:msg, type:'text', ...replyData, ...ttlData}, res=>{
       if (res&&!res.success) console.error('send_message error:', res.error);
     });
-    else if (chat.type==='group') s.emit('send_group_message', {groupId:chat.id, text:msg, type:'text', ...replyData}, res=>{
+    else if (chat.type==='group') s.emit('send_group_message', {groupId:chat.id, text:msg, type:'text', ...replyData, ...ttlData}, res=>{
       if (res&&!res.success) console.error('send_group_message error:', res.error);
     });
     else if (chat.type==='channel') s.emit('send_channel_message', {channelId:chat.id, text:msg, type:'text'}, res=>{
@@ -855,7 +902,7 @@ export default function WhisprPro() {
     const replyData = replyTo ? {replyToId:replyTo._id, replyFrom:replyTo.from, replyText:replyTo.type==='voice'?'🎤 Голосовое':replyTo.type==='video'?'📹 Видео':replyTo.text} : {};
     const s = socketRef.current;
     const chat = activeChatRef.current;
-    doSend(s, chat, msg, replyData);
+    doSend(s, chat, msg, replyData, msgTtl);
     setText(''); setReplyTo(null);
     const key = getChatKey(activeChatRef.current);
     if (key) { draftsRef.current[key]=''; setDrafts(p=>({...p,[key]:''})); }
@@ -1674,7 +1721,9 @@ export default function WhisprPro() {
                           )}
                           <div className="flex items-center justify-end gap-1 mt-0.5">
                             {msg.edited&&<span className="text-[10px] text-white/25">ред.</span>}
+                            {msg.expiresAt&&<ExpiryTimer expiresAt={msg.expiresAt}/>}
                             <span className="text-[10px] text-white/25">{fmtTime(msg.timestamp)}</span>
+                            {msg.expiresAt&&<ExpiryTimer expiresAt={msg.expiresAt}/>}
                             {isOwn&&activeChat.type==='direct'&&<span className="text-[10px]">{msg.read?<span className="text-blue-300/70">✓✓</span>:msg.delivered?<span className="text-white/25">✓✓</span>:<span className="text-white/15">✓</span>}</span>}
                           </div>
                         </div>
@@ -1713,6 +1762,13 @@ export default function WhisprPro() {
                       <span className="text-white/70 text-sm">@{m}</span>
                     </button>
                   ))}
+                </div>
+              )}
+              {msgTtl>0&&(
+                <div className="flex items-center gap-2 mb-2 px-3 py-1.5 rounded-xl" style={{background:'rgba(255,255,255,0.04)',border:`1px solid ${T.a}30`}}>
+                  <Clock className="w-3.5 h-3.5 flex-shrink-0" style={{color:T.a}}/>
+                  <span className="text-xs flex-1" style={{color:T.a}}>Сообщение исчезнет через {msgTtl>=3600?`${msgTtl/3600}ч`:msgTtl>=60?`${msgTtl/60}мин`:`${msgTtl}с`}</span>
+                  <button onClick={()=>setMsgTtl(0)} className="p-0.5 rounded hover:bg-white/5 flex-shrink-0"><X className="w-3 h-3 text-white/30"/></button>
                 </div>
               )}
               {imagePreview&&(
@@ -1809,6 +1865,30 @@ export default function WhisprPro() {
                     placeholder="Напишите сообщение..."/>
                   <input ref={fileInputRef} type="file" accept="image/*,video/*,.pdf,.doc,.docx,.txt,.zip" className="hidden" onChange={handleFileSelect}/>
                   <button type="button" onClick={()=>fileInputRef.current?.click()} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Прикрепить файл"><Paperclip className="w-5 h-5 text-white/25"/></button>
+                  {/* Таймер исчезающих сообщений */}
+                  <div className="relative flex-shrink-0">
+                    <button type="button" onClick={e=>{e.stopPropagation();setShowTtlPicker(p=>!p);}}
+                      className="p-3 rounded-2xl hover:bg-white/5 transition-colors"
+                      style={{border:'1px solid rgba(255,255,255,0.06)',background:msgTtl>0?`rgba(${T.a.slice(1).match(/../g).map(h=>parseInt(h,16)).join(',')},0.15)`:'transparent'}}
+                      title="Исчезающее сообщение">
+                      <Clock className="w-5 h-5" style={{color:msgTtl>0?T.a:'rgba(255,255,255,0.25)'}}/>
+                    </button>
+                    {showTtlPicker&&(
+                      <div className="absolute bottom-14 left-0 rounded-2xl overflow-hidden shadow-2xl z-50 w-44"
+                        style={{background:'rgba(12,12,20,0.98)',border:'1px solid rgba(255,255,255,0.08)',animation:'popIn 0.15s ease'}}
+                        onClick={e=>e.stopPropagation()}>
+                        <div className="px-3 pt-3 pb-1 text-[10px] text-white/25 uppercase tracking-widest">Исчезнет через</div>
+                        {[[0,'Выкл.'],[30,'30 сек'],[300,'5 мин'],[3600,'1 час'],[86400,'24 часа']].map(([val,label])=>(
+                          <button key={val} onClick={()=>{setMsgTtl(val);setShowTtlPicker(false);}}
+                            className="w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-white/5 flex items-center justify-between"
+                            style={{color:msgTtl===val?T.a:'rgba(255,255,255,0.6)'}}>
+                            {label}
+                            {msgTtl===val&&<span className="text-xs">✓</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <div className="relative flex-shrink-0">
                     <button type="button" onClick={e=>{e.stopPropagation();setShowStickerPanel(p=>!p);}} className="p-3 rounded-2xl hover:bg-white/5 transition-colors" style={{border:'1px solid rgba(255,255,255,0.06)',background:showStickerPanel?'rgba(255,255,255,0.07)':'transparent'}} title="Стикеры и GIF">
                       <Smile className="w-5 h-5 text-white/25"/>
@@ -1867,6 +1947,30 @@ export default function WhisprPro() {
                   </div>
                   <button type="button" onClick={startRecording} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}}><Mic className="w-5 h-5 text-white/25"/></button>
                   <button type="button" onClick={startVideoRecording} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Видео-сообщение"><Video className="w-5 h-5 text-white/25"/></button>
+                  {/* ── Таймер исчезающего сообщения ── */}
+                  <div className="relative flex-shrink-0">
+                    <button type="button" onClick={e=>{e.stopPropagation();setShowTtlPicker(p=>!p);}}
+                      className="p-3 rounded-2xl hover:bg-white/5 transition-colors"
+                      style={{border:`1px solid ${msgTtl>0?`${T.a}60`:'rgba(255,255,255,0.06)'}`,background:msgTtl>0?`${T.a}15`:'transparent'}}
+                      title="Исчезающее сообщение">
+                      <Clock className="w-5 h-5" style={{color:msgTtl>0?T.a:'rgba(255,255,255,0.25)'}}/>
+                    </button>
+                    {showTtlPicker&&(
+                      <div className="absolute bottom-14 right-0 rounded-2xl overflow-hidden shadow-2xl z-50 w-44"
+                        style={{background:'rgba(12,12,20,0.98)',border:'1px solid rgba(255,255,255,0.08)',animation:'popIn 0.15s ease'}}
+                        onClick={e=>e.stopPropagation()}>
+                        <div className="px-3 pt-3 pb-1 text-[10px] font-semibold text-white/20 uppercase tracking-wider">Исчезнет через</div>
+                        {[[0,'Выкл.'],[30,'30 секунд'],[60,'1 минуту'],[300,'5 минут'],[3600,'1 час'],[86400,'24 часа']].map(([val,label])=>(
+                          <button key={val} onClick={()=>{setMsgTtl(val);setShowTtlPicker(false);}}
+                            className="w-full px-4 py-2.5 text-left text-sm transition-colors flex items-center justify-between"
+                            style={{color:msgTtl===val?T.a:'rgba(255,255,255,0.6)',background:msgTtl===val?`${T.a}15`:'transparent'}}>
+                            {label}
+                            {msgTtl===val&&<span style={{color:T.a}}>✓</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <button type="submit" className="px-5 py-3 rounded-2xl font-medium text-white text-sm flex items-center gap-2 flex-shrink-0 transition-all hover:opacity-85 active:scale-95"
                     style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}><Send className="w-4 h-4"/></button>
                 </form>
@@ -2195,7 +2299,15 @@ export default function WhisprPro() {
                     </div>
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0 flex-wrap justify-end">
-                    <button onClick={()=>socketRef.current?.emit('admin_verify_user',{target:u.username,verify:!u.verified},res=>{if(res.success){setAllUsers(p=>p.map(x=>x.username===u.username?{...x,verified:!u.verified}:x));}else alert(res.error);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.verified?'text-blue-300':'text-white/30'}`} style={{background:u.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:u.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}><VerifiedBadge size="sm"/> {u.verified?'Верифиц.':'Верифик.'}</button>
+                    <button onClick={()=>{
+                      const s = socketRef.current;
+                      if (!s) return alert('Нет соединения');
+                      s.emit('admin_verify_user', {target:u.username, verify:!u.verified}, res=>{
+                        if (!res) return alert('Нет ответа от сервера');
+                        if (res.success) setAllUsers(p=>p.map(x=>x.username===u.username?{...x,verified:!u.verified}:x));
+                        else alert('Ошибка: ' + res.error);
+                      });
+                    }} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.verified?'text-blue-300':'text-white/30'}`} style={{background:u.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:u.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}><VerifiedBadge size="sm"/> {u.verified?'Верифиц.':'Верифик.'}</button>
                     {u.username!=='admin'&&<button onClick={()=>socketRef.current?.emit('admin_block_user',{target:u.username,block:!u.isBlocked},res=>{if(res.success)loadAdminData(adminSearch);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${u.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:u.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:u.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{u.isBlocked?'Разблок.':'Блок.'}</button>}
                     {!u.isAdmin&&<button onClick={()=>handlePromote(u.username)} className="px-2.5 py-1.5 rounded-lg text-xs text-yellow-300 flex items-center gap-1 hover:bg-yellow-500/10 transition-colors" style={{background:'rgba(234,179,8,0.06)',border:'1px solid rgba(234,179,8,0.15)'}}><Crown className="w-3 h-3"/>Повысить</button>}
                     {u.isAdmin&&u.username!=='admin'&&<button onClick={()=>handleDemote(u.username)} className="px-2.5 py-1.5 rounded-lg text-xs text-orange-300 flex items-center gap-1" style={{background:'rgba(249,115,22,0.06)',border:'1px solid rgba(249,115,22,0.15)'}}><Crown className="w-3 h-3"/>Разжаловать</button>}
@@ -2217,8 +2329,24 @@ export default function WhisprPro() {
                     <div className="text-white/25 text-xs">{ch.username?`@${ch.username}`:''} · {ch.subscriberCount} подписч. · @{ch.owner}</div>
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0">
-                    <button onClick={()=>socketRef.current?.emit('admin_verify_channel',{channelId:ch._id,verify:!ch.verified},res=>{if(res.success){setAdminChannels(p=>p.map(x=>x._id===ch._id?{...x,verified:!ch.verified}:x));}else alert(res.error);})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.verified?'text-blue-300':'text-white/30'}`} style={{background:ch.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:ch.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}><VerifiedBadge size="sm"/> {ch.verified?'Верифиц.':'Верифик.'}</button>
-                    <button onClick={()=>socketRef.current?.emit('admin_block_channel',{channelId:ch._id,block:!ch.isBlocked},res=>{if(res.success)socketRef.current?.emit('admin_get_channels',r=>{if(r.success)setAdminChannels(r.channels||[]);});})} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:ch.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:ch.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{ch.isBlocked?'Разблок.':'Блок.'}</button>
+                    <button onClick={()=>{
+                      const s = socketRef.current;
+                      if (!s) return alert('Нет соединения');
+                      s.emit('admin_verify_channel', {channelId:ch._id, verify:!ch.verified}, res=>{
+                        if (!res) return alert('Нет ответа от сервера');
+                        if (res.success) setAdminChannels(p=>p.map(x=>x._id===ch._id?{...x,verified:!ch.verified}:x));
+                        else alert('Ошибка: ' + res.error);
+                      });
+                    }} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.verified?'text-blue-300':'text-white/30'}`} style={{background:ch.verified?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.04)',border:ch.verified?'1px solid rgba(59,130,246,0.25)':'1px solid rgba(255,255,255,0.06)'}}><VerifiedBadge size="sm"/> {ch.verified?'Верифиц.':'Верифик.'}</button>
+                    <button onClick={()=>{
+                      const s = socketRef.current;
+                      if (!s) return alert('Нет соединения');
+                      s.emit('admin_block_channel', {channelId:ch._id, block:!ch.isBlocked}, res=>{
+                        if (!res) return alert('Нет ответа');
+                        if (res.success) setAdminChannels(p=>p.map(x=>x._id===ch._id?{...x,isBlocked:!ch.isBlocked}:x));
+                        else alert('Ошибка: ' + res.error);
+                      });
+                    }} className={`px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors ${ch.isBlocked?'text-green-300':'text-orange-300'}`} style={{background:ch.isBlocked?'rgba(34,197,94,0.08)':'rgba(251,146,60,0.08)',border:ch.isBlocked?'1px solid rgba(34,197,94,0.15)':'1px solid rgba(251,146,60,0.15)'}}><Ban className="w-3 h-3"/>{ch.isBlocked?'Разблок.':'Блок.'}</button>
                   </div>
                 </div>
               ))}</div>
@@ -2268,10 +2396,15 @@ export default function WhisprPro() {
                   style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
                   <MessageSquare className="w-4 h-4"/>Написать
                 </button>
-                <button onClick={()=>handleBlockUser(viewingProfile.username, !contacts.find(c=>c.username===viewingProfile.username)?.isBlockedByMe)}
-                  className="px-4 py-2.5 rounded-xl text-red-400/70 text-sm flex items-center gap-2 hover:bg-red-500/8 transition-colors"
-                  style={{border:'1px solid rgba(239,68,68,0.15)'}}>
+                <button onClick={()=>{
+                  const isBlocked = viewingProfile.isBlockedByMe;
+                  handleBlockUser(viewingProfile.username, !isBlocked);
+                  setViewingProfile(p=>({...p, isBlockedByMe: !isBlocked}));
+                }}
+                  className={`px-4 py-2.5 rounded-xl text-sm flex items-center gap-2 transition-colors ${viewingProfile.isBlockedByMe?'text-green-400/70':'text-red-400/70'}`}
+                  style={{border:viewingProfile.isBlockedByMe?'1px solid rgba(34,197,94,0.2)':'1px solid rgba(239,68,68,0.15)'}}>
                   <Ban className="w-4 h-4"/>
+                  {viewingProfile.isBlockedByMe ? 'Разблок.' : 'Блок.'}
                 </button>
               </div>
             )}
