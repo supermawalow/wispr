@@ -116,25 +116,6 @@ function ExpiryTimer({ expiresAt }) {
   );
 }
 
-function ExpiryTimer({ expiresAt }) {
-  const [left, setLeft] = React.useState(0);
-  React.useEffect(() => {
-    const calc = () => Math.max(0, Math.ceil((new Date(expiresAt) - Date.now()) / 1000));
-    setLeft(calc());
-    const t = setInterval(() => setLeft(calc()), 1000);
-    return () => clearInterval(t);
-  }, [expiresAt]);
-  if (!expiresAt || left <= 0) return null;
-  const fmt = s => s >= 3600 ? `${Math.floor(s/3600)}ч` : s >= 60 ? `${Math.floor(s/60)}м` : `${s}с`;
-  const pct = Math.max(0, left / ((new Date(expiresAt) - new Date(expiresAt) + left*1000 + 1) / 1000) * 100);
-  return (
-    <span className="inline-flex items-center gap-0.5 text-[10px] opacity-60 ml-1" title="Исчезнет через">
-      <Clock style={{width:9,height:9,display:'inline'}}/>
-      {fmt(left)}
-    </span>
-  );
-}
-
 function VerifiedBadge({ size = 'sm', gold = false }) {
   const s = size === 'lg' ? 16 : size === 'md' ? 13 : 11;
   return (
@@ -1723,7 +1704,7 @@ export default function WhisprPro() {
                             {msg.edited&&<span className="text-[10px] text-white/25">ред.</span>}
                             {msg.expiresAt&&<ExpiryTimer expiresAt={msg.expiresAt}/>}
                             <span className="text-[10px] text-white/25">{fmtTime(msg.timestamp)}</span>
-                            {msg.expiresAt&&<ExpiryTimer expiresAt={msg.expiresAt}/>}
+                            
                             {isOwn&&activeChat.type==='direct'&&<span className="text-[10px]">{msg.read?<span className="text-blue-300/70">✓✓</span>:msg.delivered?<span className="text-white/25">✓✓</span>:<span className="text-white/15">✓</span>}</span>}
                           </div>
                         </div>
