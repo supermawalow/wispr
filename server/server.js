@@ -1203,6 +1203,40 @@ app.post('/api/ai-chat', async (req, res) => {
   } catch(e) { res.json({ error: 'Ошибка AI: ' + e.message }); }
 });
 
+// ══════════════════════════════════════════
+//  FILE UPLOAD ENDPOINT
+//  Accepts base64, stores in memory, returns URL
+//  (For production use S3/Cloudinary, but this works for free tier)
+// ══════════════════════════════════════════
+const uploadStore = new Map(); // token -> { data, mimeType, fileName, expires }
+
+app.post('/api/upload', (req, res) => {
+  try {
+    const { data, fileName, mimeType } = req.body;
+    if (!data) return res.json({ error: 'no data' });
+    // Strip data URI prefix if present
+    const base64 = data.includes(',') ? data.split(',')[1] : data;
+    const token = require('crypto').randomBytes(16).toString('hex');
+    const expires = Date.now() + 24 * 60 * 60 * 1000; // 24h
+    uploadStore.set(token, { base64, mimeType: mimeType || 'application/octet-stream', fileName: fileName || 'file', expires });
+    // Clean up old entries
+    for (const [k, v] of uploadStore.entries()) {
+      if (v.expires < Date.now()) uploadStore.delete(k);
+    }
+    res.json({ url: `${process.env.SERVER_URL || 'https://whispr-server-u5zy.onrender.com'}/api/file/${token}` });
+  } catch(e) { res.json({ error: e.message }); }
+});
+
+app.get('/api/file/:token', (req, res) => {
+  const entry = uploadStore.get(req.params.token);
+  if (!entry) return res.status(404).send('Not found');
+  const buf = Buffer.from(entry.base64, 'base64');
+  res.set('Content-Type', entry.mimeType);
+  res.set('Content-Disposition', `inline; filename="${entry.fileName}"`);
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.send(buf);
+});
+
 server.listen(PORT, () => console.log(`🚀 Whispr Server v3 on port ${PORT}`));
 process.on('SIGTERM', () => server.close(() => process.exit(0)));
 
