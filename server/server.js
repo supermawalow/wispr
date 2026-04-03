@@ -269,9 +269,11 @@ io.on('connection', (socket) => {
       const chatId = getChatId(me, target.toLowerCase());
       const msgs = await Message.find({ chatId, chatType: 'direct' })
         .sort({ timestamp: 1 }).limit(200);
+      // Mark as read and collect IDs
+      const unreadIds = msgs.filter(m => m.to === me && !m.read).map(m => m._id.toString());
       await Message.updateMany({ chatId, to: me, read: false }, { read: true });
       const senderSocket = userSockets.get(target.toLowerCase());
-      if (senderSocket) io.to(senderSocket).emit('messages_read', { by: me });
+      if (senderSocket && unreadIds.length > 0) io.to(senderSocket).emit('messages_read', { by: me, messageIds: unreadIds });
       // Добавить историю звонков как виртуальные сообщения
       const callLogs = await CallLog.find({
         $or: [{ from: me, to: target.toLowerCase() }, { from: target.toLowerCase(), to: me }]
@@ -307,9 +309,9 @@ io.on('connection', (socket) => {
         replyToId: replyToId || null, replyFrom: replyFrom || null, replyText: replyText || null,
         fileName: data.fileName || null, fileMime: data.fileMime || null
       });
-      socket.emit('new_message', msg);
+      // Only send to recipient — sender gets message via callback (optimistic UI)
       if (recipientSocket) io.to(recipientSocket).emit('new_message', msg);
-      cb({ success: true, message: msg });
+      cb({ success: true, message: msg.toObject() });
     } catch (e) { console.error('send_message error:', e); cb({ success: false, error: 'Ошибка отправки: ' + e.message }); }
   });
 
@@ -465,13 +467,13 @@ io.on('connection', (socket) => {
 
   // ── ПЕЧАТАЕТ ──
   socket.on('typing', (target) => {
-    const me = requireAuth(cb); if (!me) return;
+    const me = onlineUsers.get(socket.id); if (!me) return;
     const s = userSockets.get(target.toLowerCase());
     if (s) io.to(s).emit('user_typing', { from: me });
   });
 
   socket.on('group_typing', async (groupId) => {
-    const me = requireAuth(cb); if (!me) return;
+    const me = onlineUsers.get(socket.id); if (!me) return;
     try {
       const group = await Group.findById(groupId);
       if (!group) return;
@@ -1036,13 +1038,12 @@ io.on('connection', (socket) => {
 
   // Инициатор -> вызываемый
   socket.on('call_offer', async (data) => {
-    const me = requireAuth(cb); if (!me) return;
+    const me = onlineUsers.get(socket.id); if (!me) return;
     const { to, offer, callType = 'audio' } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) {
       io.to(s).emit('incoming_call', { from: me, offer, callType });
     } else {
-      // Сохранить пропущенный звонок
       try { await CallLog.create({ from: me, to: to.toLowerCase(), type: callType, status: 'missed', duration: 0 }); } catch(e) {}
       socket.emit('call_failed', { reason: `${to} сейчас не в сети. Звонок записан как пропущенный.` });
     }
@@ -1050,7 +1051,7 @@ io.on('connection', (socket) => {
 
   // Вызываемый принял -> отправляем answer инициатору
   socket.on('call_answer', (data) => {
-    const me = requireAuth(cb); if (!me) return;
+    const me = onlineUsers.get(socket.id); if (!me) return;
     const { to, answer } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) io.to(s).emit('call_answered', { from: me, answer });
@@ -1058,7 +1059,7 @@ io.on('connection', (socket) => {
 
   // ICE кандидаты
   socket.on('ice_candidate', (data) => {
-    const me = requireAuth(cb); if (!me) return;
+    const me = onlineUsers.get(socket.id); if (!me) return;
     const { to, candidate } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) io.to(s).emit('ice_candidate', { from: me, candidate });
@@ -1066,11 +1067,10 @@ io.on('connection', (socket) => {
 
   // Завершить звонок
   socket.on('call_end', async (data) => {
-    const me = requireAuth(cb); if (!me) return;
+    const me = onlineUsers.get(socket.id); if (!me) return;
     const { to, duration = 0, callType = 'audio' } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) io.to(s).emit('call_ended', { from: me });
-    // Сохранить в историю
     try {
       const status = duration > 0 ? 'completed' : 'cancelled';
       await CallLog.create({ from: me, to: to.toLowerCase(), type: callType, status, duration });
@@ -1079,11 +1079,10 @@ io.on('connection', (socket) => {
 
   // Отклонить звонок
   socket.on('call_reject', async (data) => {
-    const me = requireAuth(cb); if (!me) return;
+    const me = onlineUsers.get(socket.id); if (!me) return;
     const { to, callType = 'audio' } = data;
     const s = userSockets.get(to.toLowerCase());
     if (s) io.to(s).emit('call_rejected', { from: me });
-    // Сохранить пропущенный
     try {
       await CallLog.create({ from: to.toLowerCase(), to: me, type: callType, status: 'missed', duration: 0 });
     } catch(e) {}
@@ -1204,37 +1203,41 @@ app.post('/api/ai-chat', async (req, res) => {
 });
 
 // ══════════════════════════════════════════
-//  FILE UPLOAD ENDPOINT
-//  Accepts base64, stores in memory, returns URL
-//  (For production use S3/Cloudinary, but this works for free tier)
+//  FILE UPLOAD ENDPOINT — persistent in MongoDB
 // ══════════════════════════════════════════
-const uploadStore = new Map(); // token -> { data, mimeType, fileName, expires }
+const fileSchema = new mongoose.Schema({
+  token:    { type: String, required: true, unique: true, index: true },
+  base64:   { type: String, required: true },
+  mimeType: { type: String, default: 'application/octet-stream' },
+  fileName: { type: String, default: 'file' },
+  expires:  { type: Date, required: true, index: { expireAfterSeconds: 0 } } // TTL index — MongoDB auto-deletes
+});
+const FileStore = mongoose.model('FileStore', fileSchema);
 
-app.post('/api/upload', (req, res) => {
+app.post('/api/upload', async (req, res) => {
   try {
     const { data, fileName, mimeType } = req.body;
     if (!data) return res.json({ error: 'no data' });
-    // Strip data URI prefix if present
     const base64 = data.includes(',') ? data.split(',')[1] : data;
+    // Check size — max 8MB base64 (~6MB original)
+    if (base64.length > 8 * 1024 * 1024) return res.json({ error: 'Файл слишком большой (макс. 6 МБ)' });
     const token = require('crypto').randomBytes(16).toString('hex');
-    const expires = Date.now() + 24 * 60 * 60 * 1000; // 24h
-    uploadStore.set(token, { base64, mimeType: mimeType || 'application/octet-stream', fileName: fileName || 'file', expires });
-    // Clean up old entries
-    for (const [k, v] of uploadStore.entries()) {
-      if (v.expires < Date.now()) uploadStore.delete(k);
-    }
+    const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 дней
+    await FileStore.create({ token, base64, mimeType: mimeType || 'application/octet-stream', fileName: fileName || 'file', expires });
     res.json({ url: `${process.env.SERVER_URL || 'https://whispr-server-u5zy.onrender.com'}/api/file/${token}` });
   } catch(e) { res.json({ error: e.message }); }
 });
 
-app.get('/api/file/:token', (req, res) => {
-  const entry = uploadStore.get(req.params.token);
-  if (!entry) return res.status(404).send('Not found');
-  const buf = Buffer.from(entry.base64, 'base64');
-  res.set('Content-Type', entry.mimeType);
-  res.set('Content-Disposition', `inline; filename="${entry.fileName}"`);
-  res.set('Cache-Control', 'public, max-age=86400');
-  res.send(buf);
+app.get('/api/file/:token', async (req, res) => {
+  try {
+    const entry = await FileStore.findOne({ token: req.params.token });
+    if (!entry) return res.status(404).send('Not found or expired');
+    const buf = Buffer.from(entry.base64, 'base64');
+    res.set('Content-Type', entry.mimeType);
+    res.set('Content-Disposition', `inline; filename="${entry.fileName}"`);
+    res.set('Cache-Control', 'public, max-age=604800');
+    res.send(buf);
+  } catch(e) { res.status(500).send('Error'); }
 });
 
 server.listen(PORT, () => console.log(`🚀 Whispr Server v3 on port ${PORT}`));
