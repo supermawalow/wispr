@@ -309,8 +309,9 @@ io.on('connection', (socket) => {
         replyToId: replyToId || null, replyFrom: replyFrom || null, replyText: replyText || null,
         fileName: data.fileName || null, fileMime: data.fileMime || null
       });
-      // Only send to recipient — sender gets message via callback (optimistic UI)
+      // Send to recipient; also echo back to sender for immediate display
       if (recipientSocket) io.to(recipientSocket).emit('new_message', msg);
+      socket.emit('new_message', msg); // sender echo
       cb({ success: true, message: msg.toObject() });
     } catch (e) { console.error('send_message error:', e); cb({ success: false, error: 'Ошибка отправки: ' + e.message }); }
   });

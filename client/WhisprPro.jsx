@@ -841,18 +841,21 @@ export default function WhisprPro() {
   const doSend = (s, chat, msg, replyData) => {
     if (!s) { showToast('Нет соединения с сервером'); return; }
     if (!chat) { showToast('Чат не выбран'); return; }
-    if (chat.type==='direct') s.emit('send_message', {to:chat.id, text:msg, type:'text', ...replyData}, res=>{
-      if (!res) { showToast('Сервер не ответил — попробуй ещё раз'); return; }
-      if (!res.success) showToast('Ошибка: ' + res.error);
-    });
-    else if (chat.type==='group') s.emit('send_group_message', {groupId:chat.id, text:msg, type:'text', ...replyData}, res=>{
-      if (!res) { showToast('Сервер не ответил — попробуй ещё раз'); return; }
-      if (!res.success) showToast('Ошибка: ' + res.error);
-    });
-    else if (chat.type==='channel') s.emit('send_channel_message', {channelId:chat.id, text:msg, type:'text'}, res=>{
-      if (!res) { showToast('Сервер не ответил — попробуй ещё раз'); return; }
-      if (!res.success) showToast('Ошибка: ' + res.error);
-    });
+    if (chat.type==='direct') {
+      s.emit('send_message', {to:chat.id, text:msg, type:'text', ...replyData}, res=>{
+        if (!res) { showToast('Сервер не ответил — попробуй ещё раз'); return; }
+        if (!res.success) showToast('Ошибка: ' + res.error);
+      });
+    } else if (chat.type==='group') {
+      s.emit('send_group_message', {groupId:chat.id, text:msg, type:'text', ...replyData}, res=>{
+        if (!res) { showToast('Сервер не ответил — попробуй ещё раз'); return; }
+        if (!res.success) showToast('Ошибка: ' + res.error);
+      });
+    } else if (chat.type==='channel') {
+      s.emit('send_channel_message', {channelId:chat.id, text:msg, type:'text'}, res=>{
+        if (!res || !res.success) showToast(res?.error||'Ошибка отправки');
+      });
+    }
   };
 
   const handleSendMessage = e => {
