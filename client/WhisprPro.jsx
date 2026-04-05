@@ -877,6 +877,16 @@ export default function WhisprPro() {
     }
   };
 
+
+  const handlePollVote = (poll, optionIndex) => {
+    socketRef.current?.emit('vote_poll', {pollId: poll._id, optionIndex}, (res) => {
+      if (res && res.poll) {
+        const key = 'group_' + poll.groupId;
+        setMessages(p => ({...p, [key]: (p[key]||[]).map(m => String(m.pollId)===String(poll._id) ? {...m, poll: res.poll} : m)}));
+      }
+    });
+  };
+
   const handleSendMessage = e => {
     e.preventDefault();
     const msg = (text||'').trim();
@@ -1744,7 +1754,7 @@ export default function WhisprPro() {
                                   const pct=total>0?Math.round((opt.votes?.length||0)/total*100):0;
                                   const voted=myVote===i;
                                   return(
-                                    <button key={i} disabled={poll.closed} onClick={()=>socketRef.current?.emit('vote_poll',{pollId:poll._id,optionIndex:i},res=>{if(res.poll){const key=`group_${poll.groupId}`;setMessages(p=>({...p,[key]:(p[key]||[]).map(m=>m.pollId===String(poll._id||'')?{...m,poll:res.poll}:m);}));}}) }
+                                    <button key={i} disabled={poll.closed} onClick={()=>handlePollVote(poll,i)}
                                       className="w-full text-left mb-2 rounded-xl overflow-hidden relative transition-all"
                                       style={{border:`1px solid ${voted?T.a:'rgba(255,255,255,0.08)'}`,background:voted?`${T.a}15`:'rgba(255,255,255,0.04)'}}>
                                       <div className="absolute inset-0 rounded-xl" style={{width:`${pct}%`,background:voted?`${T.a}25`:'rgba(255,255,255,0.04)',transition:'width 0.4s ease'}}/>
