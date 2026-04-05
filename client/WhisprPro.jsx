@@ -320,7 +320,22 @@ export default function WhisprPro() {
   const [activeChat, setActiveChat] = useState(null);
   const [chatVisible, setChatVisible] = useState(false);
   const [messages, setMessages] = useState({});
-  
+  const [lastMessages, setLastMessages] = useState({}); // NEW: preview last msg per chat
+  const [pinnedChats, setPinnedChats] = useState([]); // NEW
+  const [galleryChat, setGalleryChat] = useState(null); // NEW: {key, items}
+  const [chatSearchMode, setChatSearchMode] = useState(false); // NEW: in-chat search
+  const [chatSearchQuery, setChatSearchQuery] = useState(''); // NEW
+  const [chatSearchResults, setChatSearchResults] = useState([]); // NEW
+  const [selectedMsgs, setSelectedMsgs] = useState([]); // NEW: multi-select
+  const [multiSelect, setMultiSelect] = useState(false); // NEW
+  const [showPollModal, setShowPollModal] = useState(false); // NEW
+  const [pollQuestion, setPollQuestion] = useState(''); // NEW
+  const [pollOptions, setPollOptions] = useState(['','']); // NEW
+  const [pollAnon, setPollAnon] = useState(false); // NEW
+  const [translating, setTranslating] = useState(null); // NEW: messageId being translated
+  const [translations, setTranslations] = useState({}); // NEW: {msgId: text}
+  const [showGroupSettings, setShowGroupSettings] = useState(false); // NEW: group roles/slow modal
+
   const [typingUsers, setTypingUsers] = useState({});
   const [avatars, setAvatars] = useState({});
 
@@ -586,6 +601,7 @@ export default function WhisprPro() {
             setContacts(res.contacts||[]);
             setGroups(res.groups||[]);
             setChannels(res.channels||[]);
+            setPinnedChats(res.pinnedChats||[]);
             setIsAuthenticated(true);
             const av = {};
             (res.contacts||[]).forEach(c => { if(c.avatar) av[c.username]=c.avatar; });
@@ -599,6 +615,7 @@ export default function WhisprPro() {
       const me = currentUserRef.current?.username;
       const key = msg.from === me ? msg.to : msg.from;
       setMessages(p => ({...p, [key]: [...(p[key]||[]), msg]}));
+      setLastMessages(p => ({...p, [key]: msg})); // NEW: track last msg
       // Счётчик непрочитанных
       if (msg.from !== me) {
         setUnreadCounts(p => {
@@ -606,17 +623,16 @@ export default function WhisprPro() {
           if (active?.type === 'direct' && active.id === key) return p;
           return {...p, [key]: (p[key]||0) + 1};
         });
-        // Push notification
         if (pushEnabledRef.current && !document.hasFocus()) {
-          const sender = msg.from;
           const body = msg.type==='voice'?'🎤 Голосовое':msg.type==='video'?'📹 Видео':msg.type==='image'?'🖼 Фото':msg.type==='gif'?'GIF':msg.type==='sticker'?msg.text:msg.text||'Новое сообщение';
-          try { new Notification(sender, { body, icon:'/favicon.ico', tag:`dm_${sender}` }); } catch(e) { /* push unavailable */ }
+          try { new Notification(msg.from, { body, icon:'/favicon.ico', tag:`dm_${msg.from}` }); } catch(e) {}
         }
       }
     });
     s.on('new_group_message', msg => {
       const key = `group_${msg.groupId}`;
       setMessages(p => ({...p, [key]: [...(p[key]||[]), msg]}));
+      setLastMessages(p => ({...p, [key]: msg})); // NEW
       const me = currentUserRef.current?.username;
       if (msg.from !== me) {
         setUnreadCounts(p => {
@@ -624,11 +640,14 @@ export default function WhisprPro() {
           if (active?.type === 'group' && active.id === msg.groupId) return p;
           return {...p, [key]: (p[key]||0) + 1};
         });
-        // Push notification
         if (pushEnabledRef.current && !document.hasFocus()) {
-          try { new Notification(msg.groupName||'Группа', { body:`${msg.from}: ${msg.type==='voice'?'🎤 Голосовое':msg.text||'Сообщение'}`, icon:'/favicon.ico', tag:`grp_${msg.groupId}` }); } catch(e) { /* push unavailable */ }
+          try { new Notification(msg.groupName||'Группа', { body:`${msg.from}: ${msg.type==='voice'?'🎤 Голосовое':msg.text||'Сообщение'}`, icon:'/favicon.ico', tag:`grp_${msg.groupId}` }); } catch(e) {}
         }
       }
+    });
+    s.on('poll_updated', poll => { // NEW
+      const key = `group_${poll.groupId}`;
+      setMessages(p => ({...p, [key]: (p[key]||[]).map(m => m.pollId===poll._id?.toString() ? {...m, poll} : m)}));
     });
     s.on('message_edited', ({messageId,newText,edited}) => setMessages(p=>{const u={...p};for(const k of Object.keys(u))u[k]=u[k].map(m=>(m._id===messageId||m.id===messageId)?{...m,text:newText,edited}:m);return u;}));
     s.on('message_deleted', ({messageId}) => setMessages(p=>{const u={...p};for(const k of Object.keys(u))u[k]=u[k].filter(m=>m._id!==messageId&&m.id!==messageId);return u;}));
@@ -1394,29 +1413,62 @@ export default function WhisprPro() {
 
         {/* List */}
         <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-0.5 scrollbar-none">
+          {/* Pinned chats section */}
+          {pinnedChats.length>0&&<div className="text-[10px] font-semibold text-white/15 uppercase tracking-[0.2em] px-2 pt-2 pb-1.5 flex items-center gap-1"><Pin className="w-2.5 h-2.5"/>Закреплённые</div>}
+          {pinnedChats.map(key=>{
+            const c=contacts.find(x=>x.username===key);
+            const g=groups.find(x=>`group_${x._id}`===key);
+            const ch=channels.find(x=>`channel_${x._id}`===key);
+            const item=c||g||ch; if(!item) return null;
+            const lm=lastMessages[key];
+            const isActive=(c&&activeChat?.type==='direct'&&activeChat.id===key)||(g&&activeChat?.type==='group'&&activeChat.id===g._id)||(ch&&activeChat?.type==='channel'&&activeChat.id===ch._id);
+            return(<div key={key} onClick={()=>c?openDirectChat(c):g?openGroupChat(g):openChannelChat(ch)}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-150 group relative"
+              style={{background:isActive?`linear-gradient(135deg,${T.a}18,${T.b}10)`:'rgba(255,255,255,0.03)',border:isActive?`1px solid ${T.a}30`:'1px solid rgba(255,255,255,0.04)'}}>
+              <Avatar username={item.username||item.name} displayName={item.displayName||item.name} avatar={avatars[item.username]} size="sm" online={c?.isOnline}/>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-white/80 truncate">{item.displayName||item.name}</div>
+                {lm&&<div className="text-xs text-white/25 truncate">{lm.type==='image'?'🖼 Фото':lm.type==='voice'?'🎤 Голосовое':lm.type==='file'?`📎 ${lm.fileName||'Файл'}`:lm.text||''}</div>}
+              </div>
+              <button onClick={e=>{e.stopPropagation();socketRef.current?.emit('pin_chat',{chatKey:key,pin:false},()=>setPinnedChats(p=>p.filter(k=>k!==key)));}} className="opacity-0 group-hover:opacity-100 text-white/20 hover:text-white/50 text-xs px-1">📌</button>
+            </div>);
+          })}
+
           {contacts.length>0&&<div className="text-[10px] font-semibold text-white/15 uppercase tracking-[0.2em] px-2 pt-2 pb-1.5">Контакты</div>}
-          {contacts.map((c,i)=>(
+          {contacts.map((c,i)=>{
+            const key=c.username;
+            const lm=lastMessages[key];
+            const isPinned=pinnedChats.includes(key);
+            return(
             <div key={c.username} onClick={()=>openDirectChat(c)}
+              onContextMenu={e=>{e.preventDefault();if(!isPinned){socketRef.current?.emit('pin_chat',{chatKey:key,pin:true},()=>setPinnedChats(p=>[...p,key]));}}}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-150 group`}
               style={{
                 background:activeChat?.type==='direct'&&activeChat.id===c.username?`linear-gradient(135deg,${T.a}18,${T.b}10)`:'transparent',
                 border:activeChat?.type==='direct'&&activeChat.id===c.username?`1px solid ${T.a}30`:'1px solid transparent',
-                transform:'none',transition:'all 0.15s ease',
                 animation:`listItem 0.3s ease ${i*0.04}s both`,
               }}>
               <Avatar username={c.username} displayName={c.displayName} avatar={c.isBlockedByMe ? null : avatars[c.username]} size="sm" online={c.isBlockedByMe ? false : c.isOnline} />
               <div className="flex-1 min-w-0">
                 <div className={`text-sm font-medium truncate flex items-center gap-1 ${activeChat?.type==='direct'&&activeChat.id===c.username?'text-white':'text-white/60'}`}>{c.displayName}{c.verified&&<VerifiedBadge/>}</div>
-                {drafts[c.username]&&activeChat?.id!==c.username&&<div className="text-xs text-white/25 truncate flex items-center gap-1"><span style={{color:T.a,fontSize:'10px'}}>Черновик:</span>{drafts[c.username]}</div>}
-                <div className="text-xs text-white/20 truncate">{c.isBlockedByMe ? <span className="text-red-400/40">заблокирован</span> : `@${c.username}`}</div>
+                {drafts[c.username]&&activeChat?.id!==c.username
+                  ?<div className="text-xs text-white/25 truncate flex items-center gap-1"><span style={{color:T.a,fontSize:'10px'}}>Черновик:</span>{drafts[c.username]}</div>
+                  :lm?<div className="text-xs text-white/20 truncate">{lm.from===currentUser?.username?'Вы: ':''}{lm.type==='image'?'🖼 Фото':lm.type==='voice'?'🎤 Голосовое':lm.type==='file'?`📎 ${lm.fileName||'Файл'}`:lm.type==='sticker'?'Стикер':lm.text||''}</div>
+                  :<div className="text-xs text-white/20 truncate">{c.isBlockedByMe ? <span className="text-red-400/40">заблокирован</span> : `@${c.username}`}</div>
+                }
               </div>
+              {lm&&<div className="text-[9px] text-white/15 flex-shrink-0">{new Date(lm.timestamp).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}</div>}
               {(unreadCounts[c.username]||0)>0 && <span className="flex-shrink-0 min-w-[18px] h-[18px] rounded-full text-[10px] font-bold text-white flex items-center justify-center px-1" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{unreadCounts[c.username]}</span>}
               <button onClick={e=>{e.stopPropagation();handleRemoveContact(c.username);}} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-white/10 rounded-lg transition-all flex-shrink-0"><X className="w-3 h-3 text-white/30" /></button>
             </div>
-          ))}
+          );})}
           {groups.length>0&&<div className="text-[10px] font-semibold text-white/15 uppercase tracking-[0.2em] px-2 pt-3 pb-1.5">Группы</div>}
-          {groups.map((g,i)=>(
+          {groups.map((g,i)=>{
+            const key=`group_${g._id}`;
+            const lm=lastMessages[key];
+            return(
             <div key={g._id} onClick={()=>openGroupChat(g)}
+              onContextMenu={e=>{e.preventDefault();const isPinned=pinnedChats.includes(key);socketRef.current?.emit('pin_chat',{chatKey:key,pin:!isPinned},()=>setPinnedChats(p=>isPinned?p.filter(k=>k!==key):[...p,key]));}}
               className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-150"
               style={{
                 background:activeChat?.type==='group'&&activeChat.id===g._id?`linear-gradient(135deg,${T.a}22,${T.c}15)`:undefined,
@@ -1426,11 +1478,13 @@ export default function WhisprPro() {
               <GroupAvatar group={g} size="sm" />
               <div className="flex-1 min-w-0">
                 <div className={`text-sm font-medium truncate ${activeChat?.type==='group'&&activeChat.id===g._id?'text-white':'text-white/60'}`}>{g.name}</div>
-                <div className="text-xs text-white/20">{g.members.length} участников</div>
+                {lm?<div className="text-xs text-white/20 truncate">{lm.from}: {lm.type==='image'?'🖼 Фото':lm.type==='voice'?'🎤 Голосовое':lm.text||''}</div>
+                  :<div className="text-xs text-white/20">{g.members.length} участников</div>}
               </div>
+              {lm&&<div className="text-[9px] text-white/15 flex-shrink-0">{new Date(lm.timestamp).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}</div>}
               {(unreadCounts[`group_${g._id}`]||0)>0 && <span className="flex-shrink-0 min-w-[18px] h-[18px] rounded-full text-[10px] font-bold text-white flex items-center justify-center px-1" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{unreadCounts[`group_${g._id}`]}</span>}
             </div>
-          ))}
+          );})}
           {/* Каналы */}
           {channels.length>0&&<div className="text-[10px] font-semibold text-white/15 uppercase tracking-[0.2em] px-2 pt-3 pb-1.5 flex items-center gap-2"><Tv2 className="w-3 h-3"/>Каналы</div>}
           {channels.map((ch,i)=>(
@@ -1482,6 +1536,7 @@ export default function WhisprPro() {
                 <button onClick={()=>startCall(activeChat.id,'video')} className="p-2 rounded-xl transition-all duration-150 hover:bg-white/6 active:scale-90 flex-shrink-0" title="Видео звонок"><Video className="w-4 h-4 text-white/35 hover:text-blue-400 transition-colors"/></button>
                 <button onClick={()=>{setShowCallHistory(true);loadCallHistory(activeChat.id);}} className="p-2 rounded-xl transition-all duration-150 hover:bg-white/6 active:scale-90 flex-shrink-0" title="История звонков"><PhoneCall className="w-4 h-4 text-white/20 hover:text-white/50 transition-colors"/></button>
               </>)}
+              <button onClick={()=>{const key=getChatKey(activeChat);socketRef.current?.emit('get_chat_media',{chatKey:key},res=>{if(res.success)setGalleryChat({key,items:res.media});});}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Галерея"><Camera className="w-4 h-4 text-white/30 hover:text-white/60 transition-colors"/></button>
               <button onClick={()=>{setShowMsgSearch(s=>!s);setMsgSearchQuery('');setMsgSearchResults([]);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Поиск по сообщениям"><Search className="w-4 h-4 text-white/30 hover:text-white/60 transition-colors"/></button>
               {activeChat.type==='group'&&<button onClick={()=>setShowGroupInfo(true)} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0"><Settings className="w-4 h-4 text-white/30"/></button>}
               {activeChat.type==='channel'&&<button onClick={()=>{setEditingChannel(activeChatData);setChannelSettingsForm({name:activeChatData?.name||'',username:activeChatData?.username||'',description:activeChatData?.description||''});setShowChannelSettings(true);}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Настройки канала"><Settings className="w-4 h-4 text-white/30"/></button>}
@@ -1543,14 +1598,16 @@ export default function WhisprPro() {
                 return (
                   <React.Fragment key={mid}>
                   {showDateSep&&<div className="flex justify-center my-4" style={{animation:'fadeIn 0.3s ease'}}><span className="px-4 py-1.5 rounded-full text-xs font-medium" style={{background:'rgba(255,255,255,0.05)',color:'rgba(255,255,255,0.25)',backdropFilter:'blur(8px)',border:'1px solid rgba(255,255,255,0.06)'}}>{dateLbl}</span></div>}
-                  <div className={`flex items-end gap-2 ${isOwn?'flex-row-reverse':'flex-row'}`}
-                    style={{animation:isOwn&&idx===chatMessages.length-1?'sendBubble 0.38s cubic-bezier(0.34,1.4,0.64,1) both':`msgIn 0.18s cubic-bezier(0.25,0.46,0.45,0.94) ${Math.min(idx,15)*0.012}s both`}}
-                    onMouseEnter={()=>{clearTimeout(hoverTimeoutRef.current);setHoveredMsg(mid);}}
+                  <div className={`flex items-end gap-2 ${isOwn?'flex-row-reverse':'flex-row'} ${multiSelect?'cursor-pointer':''}`}
+                    style={{animation:isOwn&&idx===chatMessages.length-1?'sendBubble 0.38s cubic-bezier(0.34,1.4,0.64,1) both':`msgIn 0.18s cubic-bezier(0.25,0.46,0.45,0.94) ${Math.min(idx,15)*0.012}s both`,background:multiSelect&&selectedMsgs.includes(mid)?'rgba(255,255,255,0.04)':'transparent',borderRadius:8,padding:multiSelect?'2px 4px':0,transition:'background 0.15s'}}
+                    onClick={multiSelect?()=>setSelectedMsgs(p=>p.includes(mid)?p.filter(x=>x!==mid):[...p,mid]):undefined}
+                    onMouseEnter={()=>{if(!multiSelect){clearTimeout(hoverTimeoutRef.current);setHoveredMsg(mid);}}}
                     onMouseLeave={()=>{hoverTimeoutRef.current=setTimeout(()=>setHoveredMsg(null),300);}}>
+                    {multiSelect&&<div className="flex-shrink-0 w-5 h-5 rounded-full border flex items-center justify-center transition-all" style={{borderColor:selectedMsgs.includes(mid)?T.a:'rgba(255,255,255,0.2)',background:selectedMsgs.includes(mid)?T.a:'transparent'}}>{selectedMsgs.includes(mid)&&<Check className="w-3 h-3 text-white"/>}</div>}
                     {!isOwn&&activeChat.type==='group'&&<div className="cursor-pointer hover:opacity-80 transition-opacity" onClick={()=>handleViewProfile(msg.from)}><Avatar username={msg.from} displayName={msg.from} avatar={avatars[msg.from]} size="sm"/></div>}
                     <div className="relative max-w-sm">
                       {!isOwn&&activeChat.type==='group'&&<div className="text-xs text-white/25 mb-1 ml-1">{contacts.find(c=>c.username===msg.from)?.displayName||msg.from}</div>}
-                      {hoveredMsg===mid&&!isEditing&&(
+                      {hoveredMsg===mid&&!isEditing&&!multiSelect&&(
                         <div className={`absolute ${isOwn?'right-0':'left-0'} -top-9 flex gap-0.5 rounded-xl px-1.5 py-1 z-10 shadow-xl`}
                           style={{background:'rgba(10,10,16,0.97)',border:'1px solid rgba(255,255,255,0.08)',animation:'popIn 0.18s cubic-bezier(0.34,1.8,0.64,1)',backdropFilter:'blur(12px)'}}
                           onMouseEnter={()=>{clearTimeout(hoverTimeoutRef.current);setHoveredMsg(mid);}}
@@ -1675,6 +1732,37 @@ export default function WhisprPro() {
                               <div className="flex-1 h-0.5 rounded-full" style={{background:'rgba(255,255,255,0.15)'}}><div className="h-full w-1/2 rounded-full" style={{background:'rgba(255,255,255,0.5)'}}></div></div>
                               <Mic className="w-3 h-3 text-white/30 flex-shrink-0"/>
                             </div>
+                          ):msg.type==='poll'?(()=>{
+                            const poll=msg.poll;
+                            if(!poll)return<div className="text-white/50 text-sm">📊 {msg.text}</div>;
+                            const total=poll.options.reduce((s,o)=>s+(o.votes?.length||0),0);
+                            const myVote=poll.options.findIndex(o=>o.votes?.includes(currentUser?.username));
+                            return(
+                              <div className="min-w-48">
+                                <div className="text-white/90 text-sm font-semibold mb-3">📊 {poll.question}</div>
+                                {poll.options.map((opt,i)=>{
+                                  const pct=total>0?Math.round((opt.votes?.length||0)/total*100):0;
+                                  const voted=myVote===i;
+                                  return(
+                                    <button key={i} disabled={poll.closed} onClick={()=>socketRef.current?.emit('vote_poll',{pollId:poll._id,optionIndex:i},res=>{if(res.poll){const key=`group_${poll.groupId}`;setMessages(p=>({...p,[key]:(p[key]||[]).map(m=>m.pollId===poll._id?.toString()?{...m,poll:res.poll}:m);}));}}) }
+                                      className="w-full text-left mb-2 rounded-xl overflow-hidden relative transition-all"
+                                      style={{border:`1px solid ${voted?T.a:'rgba(255,255,255,0.08)'}`,background:voted?`${T.a}15`:'rgba(255,255,255,0.04)'}}>
+                                      <div className="absolute inset-0 rounded-xl" style={{width:`${pct}%`,background:voted?`${T.a}25`:'rgba(255,255,255,0.04)',transition:'width 0.4s ease'}}/>
+                                      <div className="relative px-3 py-2 flex items-center justify-between gap-2">
+                                        <span className="text-white/80 text-xs">{voted&&'✓ '}{opt.text}</span>
+                                        <span className="text-white/40 text-xs flex-shrink-0">{pct}%</span>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                                <div className="flex items-center justify-between mt-1">
+                                  <span className="text-white/25 text-[10px]">{total} {total===1?'голос':'голосов'}{poll.anonymous?' · анонимный':''}</span>
+                                  {!poll.closed&&(msg.from===currentUser?.username)&&<button onClick={()=>socketRef.current?.emit('close_poll',poll._id,()=>{})} className="text-[10px] text-white/25 hover:text-white/50">Завершить</button>}
+                                  {poll.closed&&<span className="text-[10px] text-white/25">Завершён</span>}
+                                </div>
+                              </div>
+                            );
+                          })()
                           ):(
                             <div style={{color:"rgba(255,255,255,0.92)",fontSize:"14px",lineHeight:"1.5",wordBreak:"break-word"}}>
                               {msg.text.split(/(@\w+)/g).map((part,i)=>
@@ -1687,9 +1775,11 @@ export default function WhisprPro() {
                           <div className="flex items-center justify-end gap-1 mt-0.5">
                             {msg.edited&&<span className="text-[10px] text-white/25">ред.</span>}
                             <span className="text-[10px] text-white/25">{fmtTime(msg.timestamp)}</span>
-                            
                             {isOwn&&activeChat.type==='direct'&&<span className="text-[10px]">{msg.read?<span className="text-blue-300/70">✓✓</span>:msg.delivered?<span className="text-white/25">✓✓</span>:<span className="text-white/15">✓</span>}</span>}
                           </div>
+                          {/* Translation */}
+                          {translating===(msg._id||msg.id)&&<div className="text-[10px] text-white/30 mt-1 italic">Перевожу...</div>}
+                          {translations[msg._id||msg.id]&&<div className="text-xs text-white/50 mt-1 pt-1 border-t border-white/10 italic">🌍 {translations[msg._id||msg.id]}</div>}
                         </div>
                       )}
                       {hasR&&!isEditing&&(
@@ -1827,6 +1917,7 @@ export default function WhisprPro() {
                     placeholder="Напишите сообщение..."/>
                   <input ref={fileInputRef} type="file" accept="image/*,video/*,.pdf,.doc,.docx,.txt,.zip" className="hidden" onChange={handleFileSelect}/>
                   <button type="button" onClick={()=>fileInputRef.current?.click()} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Прикрепить файл"><Paperclip className="w-5 h-5 text-white/25"/></button>
+                  {activeChat?.type==='group'&&<button type="button" onClick={()=>setShowPollModal(true)} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Опрос"><MessageSquare className="w-5 h-5 text-white/25"/></button>}
 
                   <div className="relative flex-shrink-0">
                     <button type="button" onClick={e=>{e.stopPropagation();setShowStickerPanel(p=>!p);}} className="p-3 rounded-2xl hover:bg-white/5 transition-colors" style={{border:'1px solid rgba(255,255,255,0.06)',background:showStickerPanel?'rgba(255,255,255,0.07)':'transparent'}} title="Стикеры и GIF">
@@ -1905,9 +1996,11 @@ export default function WhisprPro() {
 
       {/* ══ CONTEXT MENU ══ */}
       {msgMenu&&(
-        <div className="fixed z-50 rounded-xl overflow-hidden shadow-2xl w-44" style={{top:220,left:'50%',transform:'translateX(-50%)',background:'rgba(8,8,14,0.97)',border:'1px solid rgba(255,255,255,0.07)',animation:'popIn 0.15s ease'}} onClick={e=>e.stopPropagation()}>
+        <div className="fixed z-50 rounded-xl overflow-hidden shadow-2xl w-48" style={{top:220,left:'50%',transform:'translateX(-50%)',background:'rgba(8,8,14,0.97)',border:'1px solid rgba(255,255,255,0.07)',animation:'popIn 0.15s ease'}} onClick={e=>e.stopPropagation()}>
           <button onClick={()=>{setReplyTo(msgMenu.msg);setMsgMenu(null);}} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><CornerUpLeft className="w-4 h-4 text-white/40"/>Ответить</button>
           <button onClick={()=>{setForwardMsg(msgMenu.msg);setShowForwardModal(true);setMsgMenu(null);}} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><Forward className="w-4 h-4 text-blue-400"/>Переслать</button>
+          {msgMenu.msg.text&&<button onClick={()=>{const id=msgMenu.msg._id||msgMenu.msg.id;setMsgMenu(null);setTranslating(id);socketRef.current?.emit('translate_message',{text:msgMenu.msg.text,targetLang:'Russian'},res=>{setTranslating(null);if(res.success)setTranslations(p=>({...p,[id]:res.translation}));else showToast('Ошибка перевода');});}} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><Globe className="w-4 h-4 text-green-400"/>Перевести</button>}
+          <button onClick={()=>{setMultiSelect(true);setSelectedMsgs([msgMenu.msg._id||msgMenu.msg.id]);setMsgMenu(null);}} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><Check className="w-4 h-4 text-white/40"/>Выбрать</button>
           {activeChat?.type==='group'&&activeChatData?.admins?.includes(currentUser?.username)&&(
             <button onClick={()=>handlePinMessage(msgMenu.msg)} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors">
               <Pin className="w-4 h-4 text-purple-400"/>{pinnedMessage?.[activeChat?.id]?._id===(msgMenu.msg._id||msgMenu.msg.id)?'Открепить':'Закрепить'}
@@ -2463,6 +2556,71 @@ export default function WhisprPro() {
             style={{boxShadow:'0 32px 80px rgba(0,0,0,0.6)',animation:'popIn 0.2s ease'}}
             onClick={e=>e.stopPropagation()}
           />
+        </div>
+      )}
+
+      {/* ── GALLERY MODAL ── */}
+      {galleryChat&&(
+        <div className="fixed inset-0 z-50 flex flex-col" style={{background:'rgba(0,0,0,0.95)',animation:'fadeIn 0.2s ease'}} onClick={()=>setGalleryChat(null)}>
+          <div className="flex items-center justify-between px-5 py-4" onClick={e=>e.stopPropagation()}>
+            <h3 className="text-white font-semibold">Медиафайлы</h3>
+            <button onClick={()=>setGalleryChat(null)} className="p-2 hover:bg-white/10 rounded-xl"><X className="w-5 h-5 text-white/50"/></button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4" onClick={e=>e.stopPropagation()}>
+            {galleryChat.items.length===0?<div className="text-white/25 text-center mt-20">Нет медиафайлов</div>:(
+              <div className="grid grid-cols-3 gap-2">
+                {galleryChat.items.map(m=>(
+                  <a key={m._id} href={m.audioData} target="_blank" rel="noreferrer"
+                    className="aspect-square rounded-xl overflow-hidden bg-white/5 flex items-center justify-center hover:opacity-80 transition-opacity">
+                    {m.type==='image'||m.type==='gif'
+                      ?<img src={m.audioData} className="w-full h-full object-cover" alt=""/>
+                      :m.type==='video'?<div className="flex flex-col items-center gap-1 text-white/40"><Video className="w-6 h-6"/><span className="text-xs">Видео</span></div>
+                      :<div className="flex flex-col items-center gap-1 text-white/40 p-2 text-center"><Paperclip className="w-6 h-6"/><span className="text-[10px] truncate w-full">{m.fileName||'Файл'}</span></div>
+                    }
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── MULTI-SELECT BAR ── */}
+      {multiSelect&&(
+        <div className="fixed bottom-0 left-0 right-0 z-50 px-4 py-3 flex items-center gap-3" style={{background:'rgba(8,8,18,0.97)',borderTop:'1px solid rgba(255,255,255,0.08)',animation:'slideUp 0.2s ease'}}>
+          <span className="text-white/50 text-sm flex-1">{selectedMsgs.length} выбрано</span>
+          <button onClick={()=>{if(confirm(`Удалить ${selectedMsgs.length} сообщений?`))selectedMsgs.forEach(id=>socketRef.current?.emit('delete_message',{messageId:id,deleteFor:'all'},()=>{}));setMultiSelect(false);setSelectedMsgs([]);}} className="px-3 py-1.5 rounded-xl text-sm text-red-400/80" style={{border:'1px solid rgba(239,68,68,0.2)'}}>Удалить</button>
+          <button onClick={()=>{setMultiSelect(false);setSelectedMsgs([]);}} className="px-3 py-1.5 rounded-xl text-sm text-white/40" style={{border:'1px solid rgba(255,255,255,0.08)'}}>Отмена</button>
+        </div>
+      )}
+
+      {/* ── POLL MODAL ── */}
+      {showPollModal&&activeChat?.type==='group'&&(
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{background:'rgba(0,0,0,0.7)'}} onClick={()=>setShowPollModal(false)}>
+          <div className="w-full max-w-sm rounded-2xl p-5" style={{background:'rgba(10,10,20,0.98)',border:'1px solid rgba(255,255,255,0.08)',animation:'slideUp 0.2s ease'}} onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-semibold">Новый опрос</h3>
+              <button onClick={()=>setShowPollModal(false)}><X className="w-5 h-5 text-white/30"/></button>
+            </div>
+            <input className="w-full bg-white/6 rounded-xl px-4 py-3 text-white text-sm mb-3 outline-none" style={{border:'1px solid rgba(255,255,255,0.08)'}} placeholder="Вопрос..." value={pollQuestion} onChange={e=>setPollQuestion(e.target.value)}/>
+            {pollOptions.map((opt,i)=>(
+              <div key={i} className="flex gap-2 mb-2">
+                <input className="flex-1 bg-white/6 rounded-xl px-4 py-2.5 text-white text-sm outline-none" style={{border:'1px solid rgba(255,255,255,0.07)'}} placeholder={`Вариант ${i+1}`} value={opt} onChange={e=>{const o=[...pollOptions];o[i]=e.target.value;setPollOptions(o);}}/>
+                {pollOptions.length>2&&<button onClick={()=>setPollOptions(p=>p.filter((_,j)=>j!==i))} className="text-white/20 hover:text-white/50"><X className="w-4 h-4"/></button>}
+              </div>
+            ))}
+            {pollOptions.length<8&&<button onClick={()=>setPollOptions(p=>[...p,''])} className="text-sm text-white/30 hover:text-white/50 mb-3">+ Добавить вариант</button>}
+            <label className="flex items-center gap-2 text-sm text-white/40 mb-4 cursor-pointer">
+              <input type="checkbox" checked={pollAnon} onChange={e=>setPollAnon(e.target.checked)} className="accent-purple-500"/>Анонимный опрос
+            </label>
+            <button onClick={()=>{
+              if(!pollQuestion.trim()||pollOptions.filter(o=>o.trim()).length<2){showToast('Нужен вопрос и минимум 2 варианта');return;}
+              socketRef.current?.emit('create_poll',{groupId:activeChat.id,question:pollQuestion,options:pollOptions.filter(o=>o.trim()),anonymous:pollAnon},res=>{
+                if(res.success){setShowPollModal(false);setPollQuestion('');setPollOptions(['','']);setPollAnon(false);}
+                else showToast(res.error||'Ошибка');
+              });
+            }} className="w-full py-3 rounded-xl text-white font-semibold text-sm" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>Создать опрос</button>
+          </div>
         </div>
       )}
 

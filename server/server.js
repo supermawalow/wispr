@@ -32,9 +32,12 @@ const userSchema = new mongoose.Schema({
   verified:     { type: Boolean, default: false },
   avatar:       { type: String, default: null },
   contacts:     [{ type: String }],
+  pinnedChats:  [{ type: String }], // NEW: pinned chat keys
   bio:          { type: String, default: '' },
-  status:       { type: String, default: 'online' }, // online | away | dnd
+  customStatus: { type: String, default: '' }, // NEW: emoji+text status
+  status:       { type: String, default: 'online' },
   hideOnline:   { type: Boolean, default: false },
+  lastSeen:     { type: Date, default: null }, // NEW
   blockedUsers: [{ type: String }],
   createdAt:    { type: Date, default: Date.now }
 });
@@ -45,19 +48,34 @@ const groupSchema = new mongoose.Schema({
   avatar:        { type: String, default: null },
   owner:         { type: String, required: true },
   admins:        [{ type: String }],
+  moderators:    [{ type: String }], // NEW: moderator role
   members:       [{ type: String }],
   pinnedMessage: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
+  slowMode:      { type: Number, default: 0 }, // NEW: seconds between messages (0=off)
+  slowModeTrack: { type: Map, of: Date, default: {} }, // NEW: username->lastSent
   createdAt:     { type: Date, default: Date.now }
+});
+
+const pollSchema = new mongoose.Schema({ // NEW: polls
+  chatId:    { type: String, required: true },
+  chatType:  { type: String, default: 'group' },
+  groupId:   { type: String, default: null },
+  from:      { type: String, required: true },
+  question:  { type: String, required: true },
+  options:   [{ text: String, votes: [String] }], // votes = array of usernames
+  anonymous: { type: Boolean, default: false },
+  closed:    { type: Boolean, default: false },
+  timestamp: { type: Date, default: Date.now }
 });
 
 const messageSchema = new mongoose.Schema({
   chatId:    { type: String, required: true, index: true },
-  chatType:  { type: String, default: 'direct' }, // direct | group
+  chatType:  { type: String, default: 'direct' },
   from:      { type: String, required: true },
-  to:        { type: String, default: '' },       // username для direct
-  groupId:   { type: String, default: null },     // group id для group
+  to:        { type: String, default: '' },
+  groupId:   { type: String, default: null },
   text:      { type: String, default: '' },
-  type:      { type: String, default: 'text' },   // text | voice
+  type:      { type: String, default: 'text' }, // text|voice|image|file|video|sticker|gif|poll
   audioData: { type: String, default: null },
   timestamp: { type: Date, default: Date.now },
   delivered: { type: Boolean, default: false },
@@ -71,7 +89,8 @@ const messageSchema = new mongoose.Schema({
   replyText:     { type: String, default: null },
   fileName:      { type: String, default: null },
   fileMime:      { type: String, default: null },
-  linkPreview:   { type: Object, default: null } // {url,title,desc,image}
+  pollId:        { type: String, default: null }, // NEW
+  linkPreview:   { type: Object, default: null }
 });
 
 const adminLogSchema = new mongoose.Schema({
@@ -85,11 +104,12 @@ const adminLogSchema = new mongoose.Schema({
 
 const channelSchema = new mongoose.Schema({
   name:        { type: String, required: true },
-  username:    { type: String, default: null, lowercase: true }, // @username для поиска
+  username:    { type: String, default: null, lowercase: true },
   description: { type: String, default: '' },
   avatar:      { type: String, default: null },
   owner:       { type: String, required: true },
   admins:      [{ type: String }],
+  editors:     [{ type: String }], // NEW: can post but not manage
   subscribers: [{ type: String }],
   isPrivate:   { type: Boolean, default: false },
   isBlocked:   { type: Boolean, default: false },
@@ -112,6 +132,23 @@ const User     = mongoose.model('User', userSchema);
 const Group    = mongoose.model('Group', groupSchema);
 const Message  = mongoose.model('Message', messageSchema);
 const AdminLog = mongoose.model('AdminLog', adminLogSchema);
+const Poll     = mongoose.model('Poll', pollSchema);
+
+// ── DDoS / Rate limiting ──
+const rateLimitMap = new Map(); // socketId -> { count, resetAt }
+function rateLimit(socketId, max = 30, windowMs = 10000) {
+  const now = Date.now();
+  let entry = rateLimitMap.get(socketId);
+  if (!entry || now > entry.resetAt) entry = { count: 0, resetAt: now + windowMs };
+  entry.count++;
+  rateLimitMap.set(socketId, entry);
+  return entry.count > max;
+}
+// Clean up rate limit map every minute
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of rateLimitMap.entries()) if (now > v.resetAt) rateLimitMap.delete(k);
+}, 60000);
 
 // ══════════════════════════════════════════
 //  ИНИЦИАЛИЗАЦИЯ ADMIN
@@ -148,7 +185,16 @@ async function logAdminAction(admin, action, target, details) {
 io.on('connection', (socket) => {
   console.log('🟢 Подключение:', socket.id);
 
-  // Хелпер: проверить авторизацию и уведомить клиент если сессия протухла
+  // DDoS protection: rate limit all events
+  socket.use(([event], next) => {
+    if (rateLimit(socket.id)) {
+      console.warn(`⚠️ Rate limit exceeded: ${socket.id} on ${event}`);
+      socket.emit('rate_limited', { event });
+      return; // drop event
+    }
+    next();
+  });
+
   const requireAuth = (cb) => {
     const me = onlineUsers.get(socket.id);
     if (!me) {
@@ -202,7 +248,7 @@ io.on('connection', (socket) => {
 
       // Каналы пользователя
       const userChannels = await Channel.find({ subscribers: user.username });
-      cb({ success: true, user: { ...user.toObject(), password: undefined }, contacts, groups, channels: userChannels });
+      cb({ success: true, user: { ...user.toObject(), password: undefined }, contacts, groups, channels: userChannels, pinnedChats: user.pinnedChats||[] });
     } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
   });
 
@@ -353,7 +399,6 @@ io.on('connection', (socket) => {
     } catch (e) { cb({ success: false, error: 'Ошибка загрузки' }); }
   });
 
-  // Отправить в группу
   socket.on('send_group_message', async (data, cb) => {
     const me = requireAuth(cb); if (!me) return;
     try {
@@ -361,14 +406,26 @@ io.on('connection', (socket) => {
       const group = await Group.findById(groupId);
       if (!group) return cb({ success: false, error: 'Группа не найдена' });
       if (!group.members.includes(me)) return cb({ success: false, error: 'Нет доступа' });
+      // Slow mode check (skip for admins/moderators)
+      const isPrivileged = group.owner===me || group.admins.includes(me) || group.moderators?.includes(me);
+      if (group.slowMode > 0 && !isPrivileged) {
+        const lastSent = group.slowModeTrack?.get(me);
+        if (lastSent && (Date.now() - new Date(lastSent).getTime()) < group.slowMode * 1000) {
+          const wait = Math.ceil(group.slowMode - (Date.now() - new Date(lastSent).getTime()) / 1000);
+          return cb({ success: false, error: `Медленный режим: подожди ещё ${wait} сек.` });
+        }
+        group.slowModeTrack = group.slowModeTrack || new Map();
+        group.slowModeTrack.set(me, new Date());
+        await group.save();
+      }
       const msg = await Message.create({
         chatId: getGroupChatId(groupId), chatType: 'group',
         from: me, to: '', groupId,
         text: text || '', type: type || 'text', audioData: audioData || null,
         replyToId: replyToId || null, replyFrom: replyFrom || null, replyText: replyText || null,
+        fileName: data.fileName || null, fileMime: data.fileMime || null,
         delivered: true, read: false
       });
-      // Рассылаем всем участникам группы
       for (const member of group.members) {
         const s = userSockets.get(member);
         if (s) io.to(s).emit('new_group_message', { ...msg.toObject(), groupId });
@@ -764,7 +821,7 @@ io.on('connection', (socket) => {
       const { channelId, text, type, audioData, videoData } = data;
       const ch = await Channel.findById(channelId);
       if (!ch) return cb({ success: false, error: 'Канал не найден' });
-      if (!ch.admins.includes(me)) return cb({ success: false, error: 'Только админы могут писать' });
+      if (!ch.admins.includes(me) && ch.owner !== me && !(ch.editors||[]).includes(me)) return cb({ success: false, error: 'Только администраторы могут писать' });
       const msg = await Message.create({
         chatId: `channel_${channelId}`, chatType: 'channel',
         from: me, groupId: channelId, text: text || '', type: type || 'text',
@@ -1101,14 +1158,213 @@ io.on('connection', (socket) => {
   });
 
   // ── ОТКЛЮЧЕНИЕ ──
+  // ── ЗАКРЕПЛЁННЫЕ ЧАТЫ ──
+  socket.on('pin_chat', async ({ chatKey, pin }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      if (pin) await User.updateOne({ username: me }, { $addToSet: { pinnedChats: chatKey } });
+      else      await User.updateOne({ username: me }, { $pull: { pinnedChats: chatKey } });
+      cb({ success: true });
+    } catch(e) { cb({ success: false }); }
+  });
+
+  // ── LAST SEEN ──
+  socket.on('get_last_seen', async (username, cb) => {
+    try {
+      const u = await User.findOne({ username }, 'lastSeen hideOnline');
+      if (!u) return cb({ success: false });
+      const isOnline = userSockets.has(username);
+      cb({ success: true, isOnline, lastSeen: u.hideOnline ? null : u.lastSeen });
+    } catch(e) { cb({ success: false }); }
+  });
+
+  // ── ОПРОСЫ ──
+  socket.on('create_poll', async (data, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      const { groupId, question, options, anonymous } = data;
+      if (!question?.trim() || !options?.length) return cb({ success: false, error: 'Неверные данные' });
+      const group = await Group.findById(groupId);
+      if (!group || !group.members.includes(me)) return cb({ success: false, error: 'Нет доступа' });
+      const poll = await Poll.create({
+        chatId: getGroupChatId(groupId), chatType: 'group', groupId,
+        from: me, question: question.trim(),
+        options: options.map(t => ({ text: t, votes: [] })),
+        anonymous: !!anonymous
+      });
+      const msg = await Message.create({
+        chatId: getGroupChatId(groupId), chatType: 'group',
+        from: me, groupId, type: 'poll', text: question,
+        pollId: poll._id.toString(), delivered: true
+      });
+      const payload = { ...msg.toObject(), groupId, poll: poll.toObject() };
+      for (const member of group.members) {
+        const s = userSockets.get(member);
+        if (s) io.to(s).emit('new_group_message', payload);
+      }
+      cb({ success: true, poll, message: msg });
+    } catch(e) { cb({ success: false, error: e.message }); }
+  });
+
+  socket.on('vote_poll', async ({ pollId, optionIndex }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      const poll = await Poll.findById(pollId);
+      if (!poll || poll.closed) return cb({ success: false, error: 'Опрос закрыт' });
+      // Remove previous vote
+      poll.options.forEach(o => { o.votes = o.votes.filter(v => v !== me); });
+      if (optionIndex >= 0 && optionIndex < poll.options.length) poll.options[optionIndex].votes.push(me);
+      await poll.save();
+      // Broadcast update
+      if (poll.groupId) {
+        const group = await Group.findById(poll.groupId);
+        if (group) for (const m of group.members) { const s = userSockets.get(m); if (s) io.to(s).emit('poll_updated', poll); }
+      }
+      cb({ success: true, poll });
+    } catch(e) { cb({ success: false, error: e.message }); }
+  });
+
+  socket.on('close_poll', async (pollId, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      const poll = await Poll.findById(pollId);
+      if (!poll) return cb({ success: false });
+      const group = await Group.findById(poll.groupId);
+      if (!group) return cb({ success: false });
+      const canClose = poll.from === me || group.admins.includes(me) || group.owner === me;
+      if (!canClose) return cb({ success: false, error: 'Нет прав' });
+      poll.closed = true; await poll.save();
+      for (const m of group.members) { const s = userSockets.get(m); if (s) io.to(s).emit('poll_updated', poll); }
+      cb({ success: true });
+    } catch(e) { cb({ success: false }); }
+  });
+
+  // ── РОЛИ В ГРУППАХ ──
+  socket.on('group_set_role', async ({ groupId, username, role }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      const group = await Group.findById(groupId);
+      if (!group) return cb({ success: false, error: 'Не найдена' });
+      if (group.owner !== me && !group.admins.includes(me)) return cb({ success: false, error: 'Нет прав' });
+      if (role === 'admin') {
+        if (!group.admins.includes(username)) group.admins.push(username);
+        group.moderators = (group.moderators||[]).filter(m => m !== username);
+      } else if (role === 'moderator') {
+        if (!group.moderators) group.moderators = [];
+        if (!group.moderators.includes(username)) group.moderators.push(username);
+        group.admins = group.admins.filter(m => m !== username);
+      } else { // member
+        group.admins = group.admins.filter(m => m !== username);
+        group.moderators = (group.moderators||[]).filter(m => m !== username);
+      }
+      await group.save();
+      for (const m of group.members) { const s = userSockets.get(m); if (s) io.to(s).emit('group_updated', group); }
+      cb({ success: true, group });
+    } catch(e) { cb({ success: false, error: e.message }); }
+  });
+
+  // ── МЕДЛЕННЫЙ РЕЖИМ ──
+  socket.on('group_set_slow_mode', async ({ groupId, seconds }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      const group = await Group.findById(groupId);
+      if (!group) return cb({ success: false });
+      if (group.owner !== me && !group.admins.includes(me)) return cb({ success: false, error: 'Нет прав' });
+      group.slowMode = Math.max(0, parseInt(seconds) || 0);
+      await group.save();
+      for (const m of group.members) { const s = userSockets.get(m); if (s) io.to(s).emit('group_updated', group); }
+      cb({ success: true });
+    } catch(e) { cb({ success: false }); }
+  });
+
+  // ── РОЛИ В КАНАЛАХ ──
+  socket.on('channel_set_role', async ({ channelId, username, role }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      const ch = await Channel.findById(channelId);
+      if (!ch || ch.owner !== me) return cb({ success: false, error: 'Нет прав' });
+      if (role === 'admin') {
+        if (!ch.admins.includes(username)) ch.admins.push(username);
+        ch.editors = (ch.editors||[]).filter(e => e !== username);
+      } else if (role === 'editor') {
+        if (!ch.editors) ch.editors = [];
+        if (!ch.editors.includes(username)) ch.editors.push(username);
+        ch.admins = ch.admins.filter(a => a !== username);
+      } else {
+        ch.admins = ch.admins.filter(a => a !== username);
+        ch.editors = (ch.editors||[]).filter(e => e !== username);
+      }
+      await ch.save();
+      for (const s of ch.subscribers) { const sid = userSockets.get(s); if (sid) io.to(sid).emit('channel_updated', ch); }
+      cb({ success: true, channel: ch });
+    } catch(e) { cb({ success: false }); }
+  });
+
+  // ── ПОИСК ПО СООБЩЕНИЯМ (улучшенный) ──
+  socket.on('search_in_chat', async ({ chatKey, query }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    if (!query || query.length < 2) return cb({ success: true, results: [] });
+    try {
+      let filter = { text: { $regex: query, $options: 'i' } };
+      if (chatKey.startsWith('group_')) {
+        filter.groupId = chatKey.replace('group_', ''); filter.chatType = 'group';
+      } else if (chatKey.startsWith('channel_')) {
+        filter.chatId = chatKey; filter.chatType = 'channel';
+      } else {
+        filter.chatType = 'direct'; filter.chatId = [me, chatKey].sort().join('_');
+      }
+      const results = await Message.find(filter).sort({ timestamp: -1 }).limit(50);
+      cb({ success: true, results });
+    } catch(e) { cb({ success: false, results: [] }); }
+  });
+
+  // ── AI ПЕРЕВОД ──
+  socket.on('translate_message', async ({ text, targetLang }, cb) => {
+    requireAuth(cb);
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return cb({ success: false, error: 'AI не настроен' });
+    try {
+      const body = JSON.stringify({
+        model: 'llama-3.3-70b-versatile', max_tokens: 512,
+        messages: [
+          { role: 'system', content: `Translate the following text to ${targetLang||'Russian'}. Reply with ONLY the translated text, no explanation.` },
+          { role: 'user', content: text }
+        ]
+      });
+      const https_m = require('https');
+      const resp = await new Promise((resolve, reject) => {
+        const req = https_m.request({ hostname:'api.groq.com', path:'/openai/v1/chat/completions', method:'POST',
+          headers:{'Content-Type':'application/json','Authorization':`Bearer ${apiKey}`,'Content-Length':Buffer.byteLength(body)}
+        }, r => { let d=''; r.on('data',c=>d+=c); r.on('end',()=>{ try{resolve(JSON.parse(d));}catch(e){reject(e);} }); });
+        req.on('error',reject); req.write(body); req.end();
+      });
+      cb({ success: true, translation: resp.choices?.[0]?.message?.content || '' });
+    } catch(e) { cb({ success: false, error: e.message }); }
+  });
+
+  // ── ГАЛЕРЕЯ ЧАТА ──
+  socket.on('get_chat_media', async ({ chatKey }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      let filter = { type: { $in: ['image','video','file','gif'] } };
+      if (chatKey.startsWith('group_')) { filter.groupId = chatKey.replace('group_',''); filter.chatType='group'; }
+      else if (chatKey.startsWith('channel_')) { filter.chatId=chatKey; filter.chatType='channel'; }
+      else { filter.chatType='direct'; filter.chatId=[me,chatKey].sort().join('_'); }
+      const media = await Message.find(filter).sort({ timestamp: -1 }).limit(200);
+      cb({ success: true, media });
+    } catch(e) { cb({ success: false, media: [] }); }
+  });
+
   socket.on('disconnect', () => {
     const username = onlineUsers.get(socket.id);
     if (username) {
       onlineUsers.delete(socket.id);
       userSockets.delete(username);
-      io.emit('user_status_change', { username, isOnline: false });
+      User.updateOne({ username }, { lastSeen: new Date() }).catch(()=>{});
+      io.emit('user_status_change', { username, isOnline: false, lastSeen: new Date() });
       console.log(`🔴 ${username} отключился`);
     }
+    rateLimitMap.delete(socket.id);
   });
 });
 
