@@ -298,6 +298,38 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
   );
 }
 
+
+function PollMessage({ poll, text, currentUser, T, onVote, onClose }) {
+  if (!poll) return <div className="text-white/50 text-sm">📊 {text}</div>;
+  const total = poll.options.reduce((s,o) => s + (o.votes?.length||0), 0);
+  const myVote = poll.options.findIndex(o => o.votes?.includes(currentUser?.username));
+  return (
+    <div className="min-w-48">
+      <div className="text-white/90 text-sm font-semibold mb-3">📊 {poll.question}</div>
+      {poll.options.map((opt,i) => {
+        const pct = total>0 ? Math.round((opt.votes?.length||0)/total*100) : 0;
+        const voted = myVote===i;
+        return (
+          <button key={i} disabled={poll.closed} onClick={() => onVote(poll,i)}
+            className="w-full text-left mb-2 rounded-xl overflow-hidden relative transition-all"
+            style={{border:`1px solid ${voted?T.a:'rgba(255,255,255,0.08)'}`,background:voted?T.a+'15':'rgba(255,255,255,0.04)'}}>
+            <div className="absolute inset-0 rounded-xl" style={{width:`${pct}%`,background:voted?T.a+'25':'rgba(255,255,255,0.04)',transition:'width 0.4s ease'}}/>
+            <div className="relative px-3 py-2 flex items-center justify-between gap-2">
+              <span className="text-white/80 text-xs">{voted&&'✓ '}{opt.text}</span>
+              <span className="text-white/40 text-xs flex-shrink-0">{pct}%</span>
+            </div>
+          </button>
+        );
+      })}
+      <div className="flex items-center justify-between mt-1">
+        <span className="text-white/25 text-[10px]">{total} {total===1?'голос':'голосов'}{poll.anonymous?' · анонимный':''}</span>
+        {!poll.closed && <button onClick={onClose} className="text-[10px] text-white/25 hover:text-white/50">Завершить</button>}
+        {poll.closed && <span className="text-[10px] text-white/25">Завершён</span>}
+      </div>
+    </div>
+  );
+}
+
 export default function WhisprPro() {
   const [socket, setSocket] = useState(null);
   const socketRef = useRef(null);
@@ -1742,38 +1774,7 @@ export default function WhisprPro() {
                               <div className="flex-1 h-0.5 rounded-full" style={{background:'rgba(255,255,255,0.15)'}}><div className="h-full w-1/2 rounded-full" style={{background:'rgba(255,255,255,0.5)'}}></div></div>
                               <Mic className="w-3 h-3 text-white/30 flex-shrink-0"/>
                             </div>
-                          ):msg.type==='poll'?(()=>{
-                            const poll=msg.poll;
-                            if(!poll)return<div className="text-white/50 text-sm">📊 {msg.text}</div>;
-                            const total=poll.options.reduce((s,o)=>s+(o.votes?.length||0),0);
-                            const myVote=poll.options.findIndex(o=>o.votes?.includes(currentUser?.username));
-                            return(
-                              <div className="min-w-48">
-                                <div className="text-white/90 text-sm font-semibold mb-3">📊 {poll.question}</div>
-                                {poll.options.map((opt,i)=>{
-                                  const pct=total>0?Math.round((opt.votes?.length||0)/total*100):0;
-                                  const voted=myVote===i;
-                                  return(
-                                    <button key={i} disabled={poll.closed} onClick={()=>handlePollVote(poll,i)}
-                                      className="w-full text-left mb-2 rounded-xl overflow-hidden relative transition-all"
-                                      style={{border:`1px solid ${voted?T.a:'rgba(255,255,255,0.08)'}`,background:voted?`${T.a}15`:'rgba(255,255,255,0.04)'}}>
-                                      <div className="absolute inset-0 rounded-xl" style={{width:`${pct}%`,background:voted?`${T.a}25`:'rgba(255,255,255,0.04)',transition:'width 0.4s ease'}}/>
-                                      <div className="relative px-3 py-2 flex items-center justify-between gap-2">
-                                        <span className="text-white/80 text-xs">{voted&&'✓ '}{opt.text}</span>
-                                        <span className="text-white/40 text-xs flex-shrink-0">{pct}%</span>
-                                      </div>
-                                    </button>
-                                  );
-                                })}
-                                <div className="flex items-center justify-between mt-1">
-                                  <span className="text-white/25 text-[10px]">{total} {total===1?'голос':'голосов'}{poll.anonymous?' · анонимный':''}</span>
-                                  {!poll.closed&&(msg.from===currentUser?.username)&&<button onClick={()=>socketRef.current?.emit('close_poll',poll._id,()=>{})} className="text-[10px] text-white/25 hover:text-white/50">Завершить</button>}
-                                  {poll.closed&&<span className="text-[10px] text-white/25">Завершён</span>}
-                                </div>
-                              </div>
-                            );
-                          })()
-                          ):(
+                          ):msg.type==='poll'?<PollMessage poll={msg.poll} text={msg.text} currentUser={currentUser} T={T} onVote={handlePollVote} onClose={()=>socketRef.current?.emit('close_poll',msg.poll?._id,()=>{})}/>:(
                             <div style={{color:"rgba(255,255,255,0.92)",fontSize:"14px",lineHeight:"1.5",wordBreak:"break-word"}}>
                               {msg.text.split(/(@\w+)/g).map((part,i)=>
                                 part.startsWith('@')
