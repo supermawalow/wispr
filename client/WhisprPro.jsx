@@ -202,24 +202,30 @@ function ActiveCallOverlay({ peer, peerDisplay, peerAvatar, duration, muted, onM
   const remoteVidRef = useRef(null);
   const remoteAudioRef = useRef(null);
 
+  // Attach local stream to video element
   useEffect(() => {
-    if (localVidRef.current && localStream) {
-      localVidRef.current.srcObject = localStream;
-      localVidRef.current.play().catch(()=>{});
+    const el = localVidRef.current;
+    if (!el || !localStream) return;
+    if (el.srcObject !== localStream) {
+      el.srcObject = localStream;
+      el.play().catch(()=>{});
     }
-  }, [localStream]);
+  });  // runs every render — ensures video is always attached
 
+  // Attach remote stream
   useEffect(() => {
     if (!remoteStream) return;
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.srcObject = remoteStream;
-      remoteAudioRef.current.play().catch(()=>{});
+    const audio = remoteAudioRef.current;
+    const vid   = remoteVidRef.current;
+    if (audio && audio.srcObject !== remoteStream) {
+      audio.srcObject = remoteStream;
+      audio.play().catch(()=>{});
     }
-    if (remoteVidRef.current) {
-      remoteVidRef.current.srcObject = remoteStream;
-      remoteVidRef.current.play().catch(()=>{});
+    if (vid && vid.srcObject !== remoteStream) {
+      vid.srcObject = remoteStream;
+      vid.play().catch(()=>{});
     }
-  }, [remoteStream]);
+  });  // runs every render
 
   if (isVideo) {
     return (
@@ -417,6 +423,7 @@ export default function WhisprPro() {
   // Админ
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [adminTab, setAdminTab] = useState('users');
+  const [siteFeatures, setSiteFeatures] = useState({calls:true,voiceMessages:true,videoMessages:true,fileUploads:true,gifSearch:true,aiChat:true,groupCreation:true,channelCreation:true});
   const [adminStats, setAdminStats] = useState(null);
   const [allUsers, setAllUsers] = useState([]);
   const [adminLogs, setAdminLogs] = useState([]);
@@ -528,12 +535,14 @@ export default function WhisprPro() {
     iceServers: [
       {urls:'stun:stun.l.google.com:19302'},
       {urls:'stun:stun1.l.google.com:19302'},
-      {urls:'stun:stun2.l.google.com:19302'},
-      {urls:'stun:stun3.l.google.com:19302'},
-      {urls:'stun:stun4.l.google.com:19302'},
       {urls:'stun:stun.cloudflare.com:3478'},
+      // Бесплатные TURN серверы (для работы через NAT/разные сети)
+      {urls:'turn:openrelay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},
+      {urls:'turn:openrelay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'},
+      {urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'},
     ],
     iceCandidatePoolSize: 10,
+    iceTransportPolicy: 'all',
   };
 
   useEffect(() => { try { localStorage.setItem('whispr_theme',theme); } catch(e) { /* storage unavailable */ } }, [theme]);
@@ -751,6 +760,7 @@ export default function WhisprPro() {
       }
     });
     s.on('channel_updated', ch => setChannels(p => p.map(x => x._id===ch._id ? ch : x)));
+    s.on('features_updated', features => setSiteFeatures(features));
     s.on('channel_deleted', ({channelId}) => {
       setChannels(p => p.filter(x => x._id!==channelId));
       setActiveChat(a => (a?.type==='channel'&&a.id===channelId) ? null : a);
@@ -919,6 +929,11 @@ export default function WhisprPro() {
     });
   };
 
+  const checkFeature = (key, label) => {
+    if (!siteFeatures[key]) { alert(`⚠️ ${label} временно недоступны по техническим причинам`); return false; }
+    return true;
+  };
+
   const handleSendMessage = e => {
     e.preventDefault();
     const msg = (text||'').trim();
@@ -945,6 +960,7 @@ export default function WhisprPro() {
   const deleteMsg = (msg,forAll)=>{socketRef.current?.emit('delete_message',{messageId:msg._id||msg.id,deleteFor:forAll?'all':'me'},()=>{});setMsgMenu(null);};
   const submitForward = to=>{socketRef.current?.emit('forward_message',{messageId:forwardMsg._id||forwardMsg.id,toUsername:to},res=>{if(res.success){setShowForwardModal(false);setForwardMsg(null);const c=contacts.find(x=>x.username===to);if(c)openDirectChat(c);}});};
   const startRecording = async () => {
+    if (!checkFeature('voiceMessages','Голосовые сообщения')) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
       const mr = new MediaRecorder(stream, {mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm'});
@@ -983,6 +999,7 @@ export default function WhisprPro() {
     s.emit('admin_get_users', {search}, res=>{if(res.success)setAllUsers(res.users);});
     s.emit('admin_get_logs', res=>{if(res.success)setAdminLogs(res.logs);});
     s.emit('admin_get_channels', res=>{if(res.success)setAdminChannels(res.channels||[]);});
+    s.emit('admin_get_features', res=>{if(res.success)setSiteFeatures(res.features);});
   };
   const handlePromote = u=>{if(!confirm(`Сделать ${u} администратором?`))return;socketRef.current?.emit('admin_promote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
   const handleDemote = u=>{if(!confirm(`Разжаловать ${u}?`))return;socketRef.current?.emit('admin_demote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
@@ -1121,6 +1138,7 @@ export default function WhisprPro() {
 
   // Видео-кружочки
   const startVideoRecording = async () => {
+    if (!checkFeature('videoMessages','Видео-кружочки')) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:320,height:320},audio:true});
       if (videoPreviewRef.current) { videoPreviewRef.current.srcObject=stream; videoPreviewRef.current.play().catch(()=>{}); }
@@ -1284,6 +1302,7 @@ export default function WhisprPro() {
   };
 
   const sendFile = (data, name, mimeType) => {
+    if (!checkFeature('fileUploads','Отправка файлов')) return;
     const chat = activeChatRef.current;
     if (!chat || !socket) return;
     setSendingFile(true);
@@ -1424,7 +1443,7 @@ export default function WhisprPro() {
             <div className="flex gap-0.5 flex-shrink-0">
               <button onClick={()=>{setShowSettings(true);setSettingsTab('account');setEditDisplayName(currentUser?.displayName||'');setEditUsername(currentUser?.username||'');setEditBio(currentUser?.bio||'');setProfileError('');setProfileSuccess('');}} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors" title="Настройки"><Settings className="w-4 h-4 text-white/30 hover:text-white/60" /></button>
               {currentUser?.isAdmin&&<button onClick={()=>{setShowAdminPanel(true);loadAdminData();}} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"><Shield className="w-4 h-4 text-white/30 hover:text-white/60" /></button>}
-              <button onClick={()=>setShowAiChat(true)} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors" title="Whispr AI"><MessageSquare className="w-4 h-4 text-white/30 hover:text-white/60"/></button>
+              <button onClick={()=>{if(checkFeature('aiChat','Whispr AI'))setShowAiChat(true);}} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors" title="Whispr AI"><MessageSquare className="w-4 h-4 text-white/30 hover:text-white/60"/></button>
               <button onClick={pushEnabled ? ()=>{setPushEnabled(false);pushEnabledRef.current=false;} : requestPushPermission}
                 className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"
                 title={pushEnabled?'Уведомления вкл':'Включить уведомления'}>
@@ -2296,9 +2315,9 @@ export default function WhisprPro() {
             <div className="flex items-center justify-between mb-5"><h3 className="text-white/80 font-semibold text-base flex items-center gap-2"><Shield className="w-4 h-4"/>Панель администратора</h3><button onClick={()=>setShowAdminPanel(false)} className="p-1.5 rounded-lg hover:bg-white/5"><X className="w-4 h-4 text-white/30"/></button></div>
             {adminStats&&<div className="grid grid-cols-6 gap-2 mb-5">{[['Всего',adminStats.totalUsers],['Онлайн',adminStats.onlineUsers],['Сообщ.',adminStats.totalMessages],['Чатов',adminStats.totalChats],['Заблок.',adminStats.blockedUsers],['Групп',adminStats.totalGroups]].map(([l,v])=>(<div key={l} className="p-3 rounded-xl text-center" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.05)'}}><div className="text-white/25 text-xs">{l}</div><div className="text-xl font-bold text-white/80">{v}</div></div>))}</div>}
             <div className="flex gap-2 mb-4">
-              {[['users','Пользователи'],['logs','История']].map(([t,label])=>(
+              {[['users','Пользователи'],['features','Функции'],['logs','История']].map(([t,label])=>(
                 <button key={t} onClick={()=>setAdminTab(t)} className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition-all ${adminTab===t?'text-white/80':'text-white/25 hover:text-white/50'}`} style={adminTab===t?{background:`linear-gradient(135deg,${T.a}30,${T.b}20)`,border:'1px solid rgba(255,255,255,0.07)'}:{}}>
-                  {t==='users'?<><Users className="w-4 h-4"/>{label}</>:<><History className="w-4 h-4"/>{label}</>}
+                  {t==='users'?<><Users className="w-4 h-4"/>{label}</>:t==='features'?<><Settings className="w-4 h-4"/>{label}</>:<><History className="w-4 h-4"/>{label}</>}
                 </button>
               ))}
             </div>
@@ -2328,7 +2347,33 @@ export default function WhisprPro() {
                 </div>
               ))}</div></>
             )}
-                        {adminTab==='logs'&&<div className="space-y-1.5">{adminLogs.length===0&&<p className="text-center py-10 text-white/15">Нет действий</p>}{adminLogs.map((log,i)=>(<div key={i} className="px-4 py-3 rounded-xl flex items-center justify-between" style={{background:'rgba(255,255,255,0.02)'}}><div><div className="text-white/60 text-sm">{log.details}</div><div className="text-white/20 text-xs mt-0.5">@{log.admin}</div></div><div className="text-white/20 text-xs flex-shrink-0 ml-4">{fmtTime(log.timestamp)}</div></div>))}</div>}
+                        {adminTab==='features'&&(
+              <div className="space-y-3">
+                <p className="text-white/30 text-xs mb-4">Отключённые функции показывают пользователям сообщение о тех.работах</p>
+                {[
+                  ['calls','📞 Звонки (аудио и видео)'],
+                  ['voiceMessages','🎤 Голосовые сообщения'],
+                  ['videoMessages','📹 Видео-кружочки'],
+                  ['fileUploads','📎 Отправка файлов'],
+                  ['gifSearch','🎬 GIF и стикеры'],
+                  ['aiChat','✦ Whispr AI'],
+                  ['groupCreation','👥 Создание групп'],
+                  ['channelCreation','📢 Создание каналов'],
+                ].map(([key,label])=>(
+                  <div key={key} className="flex items-center justify-between px-4 py-3 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+                    <span className="text-white/70 text-sm">{label}</span>
+                    <button onClick={()=>{
+                      const nf={...siteFeatures,[key]:!siteFeatures[key]};
+                      setSiteFeatures(nf);
+                      socketRef.current?.emit('admin_set_features',nf,r=>{if(!r?.success)alert('Ошибка');});
+                    }} className={`relative w-11 h-6 rounded-full transition-all ${siteFeatures[key]?'bg-green-500':'bg-white/15'}`}>
+                      <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${siteFeatures[key]?'right-0.5':'left-0.5'}`}/>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {adminTab==='logs'&&<div className="space-y-1.5">{adminLogs.length===0&&<p className="text-center py-10 text-white/15">Нет действий</p>}{adminLogs.map((log,i)=>(<div key={i} className="px-4 py-3 rounded-xl flex items-center justify-between" style={{background:'rgba(255,255,255,0.02)'}}><div><div className="text-white/60 text-sm">{log.details}</div><div className="text-white/20 text-xs mt-0.5">@{log.admin}</div></div><div className="text-white/20 text-xs flex-shrink-0 ml-4">{fmtTime(log.timestamp)}</div></div>))}</div>}
           </div>
         </Modal>
       )}

@@ -171,6 +171,8 @@ mongoose.connection.once('open', async () => {
 
 const onlineUsers = new Map(); // socketId -> username
 const userSockets = new Map(); // username -> socketId
+// Feature flags (in-memory, persisted to env or reset on restart)
+let siteFeatures = { calls:true, voiceMessages:true, videoMessages:true, fileUploads:true, gifSearch:true, aiChat:true, groupCreation:true, channelCreation:true };
 
 function getChatId(u1, u2) { return [u1, u2].sort().join('_'); }
 function getGroupChatId(groupId) { return `group_${groupId}`; }
@@ -861,6 +863,22 @@ io.on('connection', (socket) => {
   // ══════════════════════════════════════════
   //  АДМИН
   // ══════════════════════════════════════════
+  socket.on('admin_get_features', (cb) => {
+    const me = onlineUsers.get(socket.id); if (!me) return cb({success:false});
+    cb({success:true, features: siteFeatures});
+  });
+
+  socket.on('admin_set_features', async (features, cb) => {
+    const me = onlineUsers.get(socket.id); if (!me) return cb({success:false});
+    const user = await User.findOne({username:me});
+    if (!user?.isAdmin) return cb({success:false, error:'Нет прав'});
+    siteFeatures = {...siteFeatures, ...features};
+    // Broadcast to all clients so UI updates live
+    io.emit('features_updated', siteFeatures);
+    try { await AdminLog.create({admin:me, action:'set_features', details:`Обновлены настройки функций`}); } catch(e) {}
+    cb({success:true});
+  });
+
   socket.on('admin_get_stats', async (cb) => {
     const me = requireAuth(cb); if (!me) return;
     try {
@@ -1371,6 +1389,10 @@ io.on('connection', (socket) => {
 // ══════════════════════════════════════════
 //  REST API
 // ══════════════════════════════════════════
+app.get('/api/features', (req, res) => {
+  res.json({ features: siteFeatures });
+});
+
 app.get('/health', async (req, res) => {
   res.json({
     status: 'ok',
