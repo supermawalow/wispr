@@ -441,7 +441,18 @@ export default function WhisprPro() {
   const [profileSuccess, setProfileSuccess] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
 
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(() => window.innerWidth >= 768);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  // Track resize
+  React.useEffect(() => {
+    const onResize = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (!mobile) setShowSidebar(true);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   // Поиск по сообщениям
   const [showMsgSearch, setShowMsgSearch] = useState(false);
   const [msgSearchQuery, setMsgSearchQuery] = useState('');
@@ -880,11 +891,13 @@ export default function WhisprPro() {
   const openDirectChat = c=>{
     setActiveChat({type:'direct',id:c.username,data:c});
     setShowSearch(false);setReplyTo(null);setUnreadCounts(p=>({...p,[c.username]:0}));
+    if (window.innerWidth < 768) setShowSidebar(false);
     const draft = draftsRef.current[c.username] || '';
     setText(draft);socketRef.current?.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});};
   const openChannelChat = (ch) => {
     setActiveChat({type:'channel', id:ch._id, data:ch});
     setUnreadCounts(p=>({...p,[`channel_${ch._id}`]:0}));
+    if (window.innerWidth < 768) setShowSidebar(false);
     socketRef.current?.emit('load_channel_chat', ch._id, res=>{
       if(res.success) setMessages(p=>({...p,[`channel_${ch._id}`]:res.messages}));
     });
@@ -893,6 +906,7 @@ export default function WhisprPro() {
   const openGroupChat = g=>{
     setActiveChat({type:'group',id:g._id,data:g});
     setUnreadCounts(p=>({...p,[`group_${g._id}`]:0}));
+    if (window.innerWidth < 768) setShowSidebar(false);
     const draft = draftsRef.current[`group_${g._id}`] || '';
     setText(draft);
     socketRef.current?.emit('load_group_chat',g._id,res=>{if(res.success)setMessages(p=>({...p,[`group_${g._id}`]:res.messages}));});
@@ -1423,8 +1437,12 @@ export default function WhisprPro() {
       </div>
 
       {/* ── SIDEBAR ── */}
-      <div className={`relative flex-shrink-0 flex flex-col transition-all duration-300 ${showSidebar?'w-72 translate-x-0':'w-0 -translate-x-72 overflow-hidden'} ${activeChat&&!showSidebar?'absolute z-10 h-full':''}`}
-        style={{zIndex:2,borderRight:'1px solid rgba(255,255,255,0.05)',background:'rgba(255,255,255,0.02)'}}>
+      {/* Mobile overlay backdrop */}
+      {isMobile && showSidebar && activeChat && (
+        <div className="absolute inset-0 z-20 bg-black/50" onClick={()=>setShowSidebar(false)}/>
+      )}
+      <div className={`flex flex-col transition-all duration-300 ${isMobile?'absolute z-30 h-full':'relative flex-shrink-0'} ${showSidebar?(isMobile?'w-full translate-x-0':'w-72 translate-x-0'):(isMobile?'w-full -translate-x-full':'w-0 -translate-x-72 overflow-hidden')}`}
+        style={{zIndex:isMobile?30:2,borderRight:'1px solid rgba(255,255,255,0.05)',background:'rgba(10,10,14,0.98)',backdropFilter:'blur(20px)'}}>
 
         {/* Profile */}
         <div className="px-4 pt-5 pb-4" style={{borderBottom:'1px solid rgba(255,255,255,0.05)'}}>
@@ -1466,8 +1484,8 @@ export default function WhisprPro() {
               <Plus className="w-4 h-4 text-white/30" />
             </button>
             <div className="absolute right-0 top-full mt-1 rounded-xl overflow-hidden shadow-2xl opacity-0 group-hover/plus:opacity-100 pointer-events-none group-hover/plus:pointer-events-auto transition-all z-50 w-40" style={{background:'rgba(10,10,14,0.98)',border:'1px solid rgba(255,255,255,0.08)'}}>
-              <button onClick={()=>setShowCreateGroup(true)} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-2 transition-colors"><Hash className="w-4 h-4"/>Группа</button>
-              <button onClick={()=>setShowCreateChannel(true)} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-2 transition-colors"><Radio className="w-4 h-4"/>Канал</button>
+              <button onClick={()=>{if(checkFeature('groupCreation','Создание групп'))setShowCreateGroup(true);}} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-2 transition-colors"><Hash className="w-4 h-4"/>Группа</button>
+              <button onClick={()=>{if(checkFeature('channelCreation','Создание каналов'))setShowCreateChannel(true);}} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-2 transition-colors"><Radio className="w-4 h-4"/>Канал</button>
             </div>
           </div>
         </div>
@@ -1575,7 +1593,12 @@ export default function WhisprPro() {
           <div style={{display:'flex',flexDirection:'column',height:'100%',opacity:chatVisible?1:0,transform:chatVisible?'none':'translateY(8px)',transition:'opacity 0.25s ease, transform 0.25s ease'}}>
             {/* Header */}
             <div className="flex-shrink-0 flex items-center gap-3 px-5 py-4" style={{borderBottom:'1px solid rgba(255,255,255,0.05)',background:'rgba(0,0,0,0.2)'}}>
-              <button onClick={()=>setShowSidebar(s=>!s)} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors flex-shrink-0" title="Боковая панель"><Menu className="w-5 h-5 text-white/30 hover:text-white/60 transition-colors" /></button>
+              {isMobile
+                ? <button onClick={()=>{setShowSidebar(true);}} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors flex-shrink-0" title="Назад">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="2" strokeLinecap="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+                  </button>
+                : <button onClick={()=>setShowSidebar(s=>!s)} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors flex-shrink-0" title="Боковая панель"><Menu className="w-5 h-5 text-white/30 hover:text-white/60 transition-colors" /></button>
+              }
               {activeChat.type==='direct'?<div className="cursor-pointer hover:opacity-80 transition-opacity" onClick={()=>handleViewProfile(activeChat.id)}><Avatar username={activeChatData?.username} displayName={activeChatData?.displayName} avatar={activeChatData?.isBlockedByMe ? null : avatars[activeChatData?.username]} size="md" online={activeChatData?.isBlockedByMe ? false : activeChatData?.isOnline}/></div>:activeChat.type==='channel'?<div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>{activeChatData?.avatar?<img src={activeChatData.avatar} className="w-full h-full rounded-full object-cover" alt=""/>:<Radio className="w-5 h-5 text-white"/>}</div>:<GroupAvatar group={activeChatData} size="md"/>}
               <div className="flex-1 min-w-0">
                 <div className="text-white/90 font-semibold truncate flex items-center gap-1">{activeChat.type==='direct'?activeChatData?.displayName:activeChatData?.name}{activeChatData?.verified&&<VerifiedBadge size="md"/>}</div>
@@ -1593,8 +1616,8 @@ export default function WhisprPro() {
               </div>
 
               {activeChat.type==='direct'&&callState==='idle'&&(<>
-                <button onClick={()=>startCall(activeChat.id,'audio')} className="p-2 rounded-xl transition-all duration-150 hover:bg-white/6 active:scale-90 flex-shrink-0" title="Аудио звонок"><Phone className="w-4 h-4 text-white/35 hover:text-green-400 transition-colors"/></button>
-                <button onClick={()=>startCall(activeChat.id,'video')} className="p-2 rounded-xl transition-all duration-150 hover:bg-white/6 active:scale-90 flex-shrink-0" title="Видео звонок"><Video className="w-4 h-4 text-white/35 hover:text-blue-400 transition-colors"/></button>
+                <button onClick={()=>{if(checkFeature('calls','Звонки'))startCall(activeChat.id,'audio');}} className="p-2 rounded-xl transition-all duration-150 hover:bg-white/6 active:scale-90 flex-shrink-0" title="Аудио звонок"><Phone className="w-4 h-4 text-white/35 hover:text-green-400 transition-colors"/></button>
+                <button onClick={()=>{if(checkFeature('calls','Звонки'))startCall(activeChat.id,'video');}} className="p-2 rounded-xl transition-all duration-150 hover:bg-white/6 active:scale-90 flex-shrink-0" title="Видео звонок"><Video className="w-4 h-4 text-white/35 hover:text-blue-400 transition-colors"/></button>
                 <button onClick={()=>{setShowCallHistory(true);loadCallHistory(activeChat.id);}} className="p-2 rounded-xl transition-all duration-150 hover:bg-white/6 active:scale-90 flex-shrink-0" title="История звонков"><PhoneCall className="w-4 h-4 text-white/20 hover:text-white/50 transition-colors"/></button>
               </>)}
               <button onClick={()=>{const key=getChatKey(activeChat);socketRef.current?.emit('get_chat_media',{chatKey:key},res=>{if(res.success)setGalleryChat({key,items:res.media});});}} className="p-2 rounded-xl hover:bg-white/5 transition-colors flex-shrink-0" title="Галерея"><Camera className="w-4 h-4 text-white/30 hover:text-white/60 transition-colors"/></button>
@@ -1950,7 +1973,7 @@ export default function WhisprPro() {
                   {activeChat?.type==='group'&&<button type="button" onClick={()=>setShowPollModal(true)} className="p-3 rounded-2xl hover:bg-white/5 transition-colors flex-shrink-0" style={{border:'1px solid rgba(255,255,255,0.06)'}} title="Опрос"><MessageSquare className="w-5 h-5 text-white/25"/></button>}
 
                   <div className="relative flex-shrink-0">
-                    <button type="button" onClick={e=>{e.stopPropagation();setShowStickerPanel(p=>!p);}} className="p-3 rounded-2xl hover:bg-white/5 transition-colors" style={{border:'1px solid rgba(255,255,255,0.06)',background:showStickerPanel?'rgba(255,255,255,0.07)':'transparent'}} title="Стикеры и GIF">
+                    <button type="button" onClick={e=>{e.stopPropagation();if(checkFeature('gifSearch','GIF и стикеры'))setShowStickerPanel(p=>!p);}} className="p-3 rounded-2xl hover:bg-white/5 transition-colors" style={{border:'1px solid rgba(255,255,255,0.06)',background:showStickerPanel?'rgba(255,255,255,0.07)':'transparent'}} title="Стикеры и GIF">
                       <Smile className="w-5 h-5 text-white/25"/>
                     </button>
                     {showStickerPanel&&(
@@ -2569,7 +2592,7 @@ export default function WhisprPro() {
                       </div>
                     </div>
                     <div className="text-xs text-white/20 flex-shrink-0">{fmtTime(log.timestamp)}</div>
-                    <button onClick={()=>{setShowCallHistory(false);startCall(peer,'audio');}} className="p-1.5 rounded-lg hover:bg-white/8 transition-colors"><Phone className="w-3.5 h-3.5 text-white/30"/></button>
+                    <button onClick={()=>{setShowCallHistory(false);if(checkFeature('calls','Звонки'))startCall(peer,'audio');}} className="p-1.5 rounded-lg hover:bg-white/8 transition-colors"><Phone className="w-3.5 h-3.5 text-white/30"/></button>
                   </div>
                 );
               })}
