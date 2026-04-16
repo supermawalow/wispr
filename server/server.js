@@ -90,7 +90,8 @@ const messageSchema = new mongoose.Schema({
   fileName:      { type: String, default: null },
   fileMime:      { type: String, default: null },
   pollId:        { type: String, default: null }, // NEW
-  linkPreview:   { type: Object, default: null }
+  linkPreview:   { type: Object, default: null },
+  pinned:        { type: Boolean, default: false }  // NEW: закреплённое в ЛС
 });
 
 const adminLogSchema = new mongoose.Schema({
@@ -173,6 +174,7 @@ const onlineUsers = new Map(); // socketId -> username
 const userSockets = new Map(); // username -> socketId
 // Feature flags (in-memory, persisted to env or reset on restart)
 let siteFeatures = { calls:true, voiceMessages:true, videoMessages:true, fileUploads:true, gifSearch:true, aiChat:true, groupCreation:true, channelCreation:true };
+let maintenanceMode = false; // Режим тех.работ — отключает сайт для обычных пользователей
 
 function getChatId(u1, u2) { return [u1, u2].sort().join('_'); }
 function getGroupChatId(groupId) { return `group_${groupId}`; }
@@ -226,6 +228,7 @@ io.on('connection', (socket) => {
       if (!user) return cb({ success: false, error: 'Пользователь не найден' });
       if (user.password !== password) return cb({ success: false, error: 'Неверный пароль' });
       if (user.isBlocked) return cb({ success: false, error: 'Аккаунт заблокирован' });
+      if (maintenanceMode && !user.isAdmin) return cb({ success: false, error: '🔧 Технические работы. Сайт временно недоступен. Попробуйте позже.' });
 
       const oldSocket = userSockets.get(user.username);
       if (oldSocket) io.to(oldSocket).emit('force_disconnect', { reason: 'Новый вход с другого устройства' });
@@ -735,6 +738,88 @@ io.on('connection', (socket) => {
     } catch (e) { cb({ success: false, message: null }); }
   });
 
+  // ── Закреплённые сообщения в ЛС ──
+  socket.on('pin_direct_message', async ({ chatId, messageId }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      if (!chatId.includes(me)) return cb({ success: false, error: 'Нет прав' });
+      // Открепить если messageId=null
+      if (!messageId) {
+        await Message.updateMany({ chatId, pinned: true }, { pinned: false });
+        const [u1, u2] = chatId.split('_');
+        const other = u1 === me ? u2 : u1;
+        const otherSock = userSockets.get(other);
+        if (otherSock) io.to(otherSock).emit('direct_message_pinned', { chatId, messageId: null, pinnedBy: me });
+        return cb({ success: true });
+      }
+      const msg = await Message.findById(messageId);
+      if (!msg) return cb({ success: false, error: 'Сообщение не найдено' });
+      await Message.updateMany({ chatId, pinned: true }, { pinned: false });
+      await Message.updateOne({ _id: messageId }, { pinned: true });
+      const [u1, u2] = chatId.split('_');
+      const other = u1 === me ? u2 : u1;
+      const otherSock = userSockets.get(other);
+      if (otherSock) io.to(otherSock).emit('direct_message_pinned', { chatId, messageId, pinnedBy: me });
+      socket.emit('direct_message_pinned', { chatId, messageId, pinnedBy: me });
+      cb({ success: true });
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  socket.on('get_pinned_direct', async ({ chatId }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      if (!chatId.includes(me)) return cb({ success: false });
+      const msg = await Message.findOne({ chatId, pinned: true });
+      cb({ success: true, message: msg });
+    } catch (e) { cb({ success: false, message: null }); }
+  });
+
+  // ── Экспорт истории чата ──
+  socket.on('export_chat', async ({ chatId, format }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      // Проверка доступа (ЛС или группа)
+      const isDirect = !chatId.startsWith('group_') && !chatId.startsWith('channel_');
+      if (isDirect && !chatId.includes(me)) return cb({ success: false, error: 'Нет прав' });
+      if (chatId.startsWith('group_')) {
+        const groupId = chatId.replace('group_', '');
+        const group = await Group.findById(groupId);
+        if (!group?.members.includes(me)) return cb({ success: false, error: 'Нет прав' });
+      }
+      const messages = await Message.find({ chatId }).sort({ timestamp: 1 }).limit(5000).lean();
+      let output;
+      if (format === 'json') {
+        output = JSON.stringify(messages.map(m => ({
+          from: m.from, text: m.text, type: m.type,
+          timestamp: new Date(m.timestamp).toISOString(),
+          edited: m.edited || false
+        })), null, 2);
+      } else {
+        // TXT format
+        output = messages.map(m => {
+          const d = new Date(m.timestamp).toLocaleString('ru-RU');
+          const prefix = `[${d}] ${m.from}`;
+          if (m.type === 'text') return `${prefix}: ${m.text}`;
+          if (m.type === 'voice') return `${prefix}: [Голосовое сообщение]`;
+          if (m.type === 'image') return `${prefix}: [Изображение]`;
+          if (m.type === 'file') return `${prefix}: [Файл: ${m.fileName||''}]`;
+          return `${prefix}: [${m.type}]`;
+        }).join('\n');
+      }
+      cb({ success: true, data: output, format, count: messages.length });
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  // ── Количество участников онлайн в группе ──
+  socket.on('get_group_online_count', async ({ groupId }, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      const group = await Group.findById(groupId);
+      if (!group) return cb({ success: false });
+      const onlineCount = group.members.filter(m => userSockets.has(m)).length;
+      cb({ success: true, total: group.members.length, online: onlineCount });
+    } catch (e) { cb({ success: false }); }
+  });
 
   // ══════════════════════════════════════════
   //  КАНАЛЫ
@@ -994,7 +1079,31 @@ io.on('connection', (socket) => {
     } catch (e) { cb({ success: false, error: 'Ошибка' }); }
   });
 
-  socket.on('admin_get_channels', async (cb) => {
+  // ── Режим тех.работ ──
+  socket.on('admin_set_maintenance', async (data, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      const user = await User.findOne({ username: me });
+      if (!user?.isAdmin) return cb({ success: false, error: 'Нет прав' });
+      maintenanceMode = !!data.enabled;
+      // Кикнуть всех не-админов если включили
+      if (maintenanceMode) {
+        for (const [sockId, uname] of onlineUsers.entries()) {
+          const u = await User.findOne({ username: uname });
+          if (!u?.isAdmin) {
+            io.to(sockId).emit('force_disconnect', { reason: '🔧 Сайт переведён в режим тех.работ. Попробуйте позже.' });
+          }
+        }
+      }
+      io.emit('maintenance_updated', { enabled: maintenanceMode });
+      await logAdminAction(me, maintenanceMode ? 'MAINTENANCE_ON' : 'MAINTENANCE_OFF', null, `Режим тех.работ ${maintenanceMode ? 'включён' : 'выключен'}`);
+      cb({ success: true, enabled: maintenanceMode });
+    } catch (e) { cb({ success: false, error: 'Ошибка' }); }
+  });
+
+  socket.on('admin_get_maintenance', (cb) => {
+    cb({ success: true, enabled: maintenanceMode });
+  });
     const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
@@ -1390,7 +1499,7 @@ io.on('connection', (socket) => {
 //  REST API
 // ══════════════════════════════════════════
 app.get('/api/features', (req, res) => {
-  res.json({ features: siteFeatures });
+  res.json({ features: siteFeatures, maintenance: maintenanceMode });
 });
 
 app.get('/health', async (req, res) => {

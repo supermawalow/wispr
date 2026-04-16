@@ -424,11 +424,16 @@ export default function WhisprPro() {
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [adminTab, setAdminTab] = useState('users');
   const [siteFeatures, setSiteFeatures] = useState({calls:true,voiceMessages:true,videoMessages:true,fileUploads:true,gifSearch:true,aiChat:true,groupCreation:true,channelCreation:true});
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [adminStats, setAdminStats] = useState(null);
   const [allUsers, setAllUsers] = useState([]);
   const [adminLogs, setAdminLogs] = useState([]);
   const [adminSearch, setAdminSearch] = useState('');
   const [adminChannels, setAdminChannels] = useState([]);
+  // Новые фичи
+  const [pinnedDirectMsg, setPinnedDirectMsg] = useState({}); // chatId -> message
+  const [groupOnlineCount, setGroupOnlineCount] = useState({}); // groupId -> {online, total}
+  const [notifSoundEnabled, setNotifSoundEnabled] = useState(() => { try { return localStorage.getItem('whispr_sound') !== 'off'; } catch { return true; } });
 
   // Настройки
   const [showSettings, setShowSettings] = useState(false);
@@ -493,6 +498,7 @@ export default function WhisprPro() {
   // ── Push Notifications ──
   const [pushEnabled, setPushEnabled] = useState(false);
   const pushEnabledRef = useRef(false);
+  const notifSoundEnabledRef = useRef(true);
   const [showCallHistory, setShowCallHistory] = useState(false);
   // Видео-звонок
   const [videoEnabled, setVideoEnabled] = useState(false);
@@ -650,6 +656,7 @@ export default function WhisprPro() {
         s.emit('login', {username: u, password: p}, res => {
           if (res.success) {
             setCurrentUser(res.user);
+            s._me = res.user.username;
             setContacts(res.contacts||[]);
             setGroups(res.groups||[]);
             setChannels(res.channels||[]);
@@ -675,6 +682,19 @@ export default function WhisprPro() {
           if (active?.type === 'direct' && active.id === key) return p;
           return {...p, [key]: (p[key]||0) + 1};
         });
+        // 🔔 Звук уведомления
+        try {
+          if (notifSoundEnabledRef.current) {
+            const ctx = new (window.AudioContext||window.webkitAudioContext)();
+            const o = ctx.createOscillator(); const g = ctx.createGain();
+            o.connect(g); g.connect(ctx.destination);
+            o.frequency.setValueAtTime(880, ctx.currentTime);
+            o.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.15);
+            g.gain.setValueAtTime(0.15, ctx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+            o.start(); o.stop(ctx.currentTime + 0.25);
+          }
+        } catch(e) {}
         if (pushEnabledRef.current && !document.hasFocus()) {
           const body = msg.type==='voice'?'🎤 Голосовое':msg.type==='video'?'📹 Видео':msg.type==='image'?'🖼 Фото':msg.type==='gif'?'GIF':msg.type==='sticker'?msg.text:msg.text||'Новое сообщение';
           try { new Notification(msg.from, { body, icon:'/favicon.ico', tag:`dm_${msg.from}` }); } catch(e) {}
@@ -695,6 +715,19 @@ export default function WhisprPro() {
         if (pushEnabledRef.current && !document.hasFocus()) {
           try { new Notification(msg.groupName||'Группа', { body:`${msg.from}: ${msg.type==='voice'?'🎤 Голосовое':msg.text||'Сообщение'}`, icon:'/favicon.ico', tag:`grp_${msg.groupId}` }); } catch(e) {}
         }
+        // 🔔 Звук уведомления для группы
+        try {
+          if (notifSoundEnabledRef.current) {
+            const ctx = new (window.AudioContext||window.webkitAudioContext)();
+            const o = ctx.createOscillator(); const g2 = ctx.createGain();
+            o.connect(g2); g2.connect(ctx.destination);
+            o.frequency.setValueAtTime(660, ctx.currentTime);
+            o.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.12);
+            g2.gain.setValueAtTime(0.1, ctx.currentTime);
+            g2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+            o.start(); o.stop(ctx.currentTime + 0.2);
+          }
+        } catch(e) {}
       }
     });
     s.on('poll_updated', poll => { // NEW
@@ -772,6 +805,16 @@ export default function WhisprPro() {
     });
     s.on('channel_updated', ch => setChannels(p => p.map(x => x._id===ch._id ? ch : x)));
     s.on('features_updated', features => setSiteFeatures(features));
+    s.on('maintenance_updated', ({enabled}) => setMaintenanceMode(enabled));
+    s.on('direct_message_pinned', ({chatId, messageId}) => {
+      if (!messageId) {
+        setPinnedDirectMsg(p => ({...p, [chatId]: null}));
+        return;
+      }
+      s.emit('get_pinned_direct', {chatId}, res => {
+        if (res.success) setPinnedDirectMsg(p => ({...p, [chatId]: res.message||null}));
+      });
+    });
     s.on('channel_deleted', ({channelId}) => {
       setChannels(p => p.filter(x => x._id!==channelId));
       setActiveChat(a => (a?.type==='channel'&&a.id===channelId) ? null : a);
@@ -796,6 +839,7 @@ export default function WhisprPro() {
   useEffect(()=>{currentUserRef.current=currentUser;},[currentUser]);
   const activeChatRef = useRef(null);
   useEffect(()=>{ activeChatRef.current = activeChat; },[activeChat]);
+  useEffect(()=>{ notifSoundEnabledRef.current = notifSoundEnabled; },[notifSoundEnabled]);
 
   // Auto-login from saved creds
   useEffect(()=>{
@@ -828,7 +872,7 @@ export default function WhisprPro() {
   useEffect(()=>{if(activeChat){setChatVisible(false);setTimeout(()=>setChatVisible(true),50);}},[activeChat?.id]);
 
   const handleRegister = e => { e.preventDefault();setAuthError('');socketRef.current?.emit('register',{username,displayName,password},res=>{if(res.success)handleLogin(e);else setAuthError(res.error);}); };
-  const handleLogin = e => { e.preventDefault();setAuthError('');socketRef.current?.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){/* storage unavailable */}setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
+  const handleLogin = e => { e.preventDefault();setAuthError('');socketRef.current?.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){/* storage unavailable */}if(socketRef.current)socketRef.current._me=res.user.username;setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
   const handleLogout = () => { cleanupCall();try{localStorage.removeItem('whispr_creds');}catch(e){/* storage unavailable */}setIsAuthenticated(false);setCurrentUser(null);setContacts([]);setGroups([]);setActiveChat(null);setMessages({});setUsername('');setPassword('');setDisplayName(''); };
 
   const handleAvatarUpload = (e, fromSettings=false) => {
@@ -893,7 +937,21 @@ export default function WhisprPro() {
     setShowSearch(false);setReplyTo(null);setUnreadCounts(p=>({...p,[c.username]:0}));
     if (window.innerWidth < 768) setShowSidebar(false);
     const draft = draftsRef.current[c.username] || '';
-    setText(draft);socketRef.current?.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});};
+    setText(draft);socketRef.current?.emit('load_chat',c.username,res=>{if(res.success)setMessages(p=>({...p,[c.username]:res.messages}));});
+    // Загрузить закреплённое сообщение в ЛС
+    const chatId = [c.username, socketRef.current?._username || ''].sort().join('_');
+    // мы не знаем chatId без username, грузим после логина
+    socketRef.current?.emit('get_pinned_direct', {chatId: [c.username].sort().join('_')}, ()=>{});
+    // Загрузим через отдельный эвент после получения текущего юзера
+    setTimeout(()=>{
+      const me = socketRef.current?._me;
+      if (!me) return;
+      const cid = [c.username, me].sort().join('_');
+      socketRef.current?.emit('get_pinned_direct', {chatId: cid}, res=>{
+        if (res.success) setPinnedDirectMsg(p=>({...p,[cid]: res.message||null}));
+      });
+    }, 100);
+  };
   const openChannelChat = (ch) => {
     setActiveChat({type:'channel', id:ch._id, data:ch});
     setUnreadCounts(p=>({...p,[`channel_${ch._id}`]:0}));
@@ -912,6 +970,10 @@ export default function WhisprPro() {
     socketRef.current?.emit('load_group_chat',g._id,res=>{if(res.success)setMessages(p=>({...p,[`group_${g._id}`]:res.messages}));});
     // Загрузить закреплённое
     socketRef.current?.emit('get_pinned_message', g._id, res=>{if(res.success&&res.message)setPinnedMessage(p=>({...p,[g._id]:res.message}));});
+    // Загрузить кол-во онлайн
+    socketRef.current?.emit('get_group_online_count', {groupId: g._id}, res=>{
+      if (res.success) setGroupOnlineCount(p=>({...p,[g._id]:{online:res.online,total:res.total}}));
+    });
   };
   const doSend = (s, chat, msg, replyData) => {
     if (!s) { showToast('Нет соединения с сервером'); return; }
@@ -1014,6 +1076,7 @@ export default function WhisprPro() {
     s.emit('admin_get_logs', res=>{if(res.success)setAdminLogs(res.logs);});
     s.emit('admin_get_channels', res=>{if(res.success)setAdminChannels(res.channels||[]);});
     s.emit('admin_get_features', res=>{if(res.success)setSiteFeatures(res.features);});
+    s.emit('admin_get_maintenance', res=>{if(res.success)setMaintenanceMode(res.enabled);});
   };
   const handlePromote = u=>{if(!confirm(`Сделать ${u} администратором?`))return;socketRef.current?.emit('admin_promote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
   const handleDemote = u=>{if(!confirm(`Разжаловать ${u}?`))return;socketRef.current?.emit('admin_demote_user',u,res=>{if(res.success)loadAdminData(adminSearch);else alert(res.error);});};
@@ -1611,7 +1674,12 @@ export default function WhisprPro() {
                         : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>не в сети</span>)
                     : activeChat.type==='channel'
                     ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>📢 Канал · {activeChatData?.subscribers?.length||0} подп.</span>
-                    : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>{activeChatData?.members?.length||0} участников</span>}
+                    : (() => {
+                        const oc = groupOnlineCount[activeChat.id];
+                        return oc
+                          ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}><span style={{color:'#4ade80'}}>{oc.online}</span> из {oc.total} онлайн</span>
+                          : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>{activeChatData?.members?.length||0} участников</span>;
+                      })()}
                 </div>
               </div>
 
@@ -1665,6 +1733,22 @@ export default function WhisprPro() {
                 )}
               </div>
             )}
+            {activeChat.type==='direct' && (() => {
+              const me = currentUser?.username;
+              const cid = me ? [activeChat.id, me].sort().join('_') : null;
+              const pm = cid ? pinnedDirectMsg[cid] : null;
+              if (!pm) return null;
+              return (
+                <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2" style={{borderBottom:'1px solid rgba(255,255,255,0.05)',background:'rgba(255,255,255,0.02)'}}>
+                  <Pin className="w-3.5 h-3.5 text-purple-400/50 flex-shrink-0"/>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] text-white/20 uppercase tracking-wider">Закреплено</div>
+                    <div className="text-sm text-white/55 truncate">{pm.type==='text'?pm.text:pm.type==='voice'?'🎤 Голосовое':pm.type==='image'?'🖼 Фото':'Сообщение'}</div>
+                  </div>
+                  <button onClick={()=>{if(cid){socketRef.current?.emit('pin_direct_message',{chatId:cid,messageId:null},()=>{});setPinnedDirectMsg(p=>({...p,[cid]:null}));}}} className="p-1 hover:bg-white/5 rounded-lg transition-colors flex-shrink-0"><PinOff className="w-3.5 h-3.5 text-white/25"/></button>
+                </div>
+              );
+            })()}
             {/* Messages */}
             <div style={{flex:1,overflowY:'auto',padding:'1.25rem 1.5rem',display:'flex',flexDirection:'column',gap:'0.25rem'}}>
               {chatMessages.map((msg,idx)=>{
@@ -2059,6 +2143,30 @@ export default function WhisprPro() {
               <Pin className="w-4 h-4 text-purple-400"/>{pinnedMessage?.[activeChat?.id]?._id===(msgMenu.msg._id||msgMenu.msg.id)?'Открепить':'Закрепить'}
             </button>
           )}
+          {activeChat?.type==='direct'&&(()=>{
+            const me=currentUser?.username;
+            const cid=me?[activeChat.id,me].sort().join('_'):null;
+            const isAlreadyPinned=cid&&pinnedDirectMsg[cid]?._id===(msgMenu.msg._id||msgMenu.msg.id);
+            return(
+              <button onClick={()=>{
+                const mid=msgMenu.msg._id||msgMenu.msg.id;
+                setMsgMenu(null);
+                if(isAlreadyPinned){
+                  setPinnedDirectMsg(p=>({...p,[cid]:null}));
+                  socketRef.current?.emit('pin_direct_message',{chatId:cid,messageId:null},()=>{});
+                } else {
+                  socketRef.current?.emit('pin_direct_message',{chatId:cid,messageId:mid},res=>{
+                    if(res.success){
+                      setPinnedDirectMsg(p=>({...p,[cid]:msgMenu.msg}));
+                      showToast('Сообщение закреплено');
+                    }
+                  });
+                }
+              }} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors">
+                <Pin className="w-4 h-4 text-purple-400"/>{isAlreadyPinned?'Открепить':'Закрепить'}
+              </button>
+            );
+          })()}
           {msgMenu.isOwn&&msgMenu.msg.type!=='voice'&&<button onClick={()=>startEdit(msgMenu.msg)} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><Pencil className="w-4 h-4 text-yellow-400"/>Редактировать</button>}
           {msgMenu.isOwn&&<button onClick={()=>deleteMsg(msgMenu.msg,true)} className="w-full px-4 py-2.5 text-left text-red-400/80 text-sm hover:bg-red-500/5 flex items-center gap-3 transition-colors"><Trash2 className="w-4 h-4"/>Удалить у всех</button>}
           <button onClick={()=>deleteMsg(msgMenu.msg,false)} className="w-full px-4 py-2.5 text-left text-white/25 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><X className="w-4 h-4"/>Удалить у меня</button>
@@ -2134,6 +2242,51 @@ export default function WhisprPro() {
                   style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
                   {savingProfile?'Сохраняем...':'Сохранить изменения'}
                 </button>
+
+                {/* Звук уведомлений */}
+                <div className="flex items-center justify-between px-4 py-3 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+                  <div>
+                    <div className="text-white/60 text-sm">🔔 Звук уведомлений</div>
+                    <div className="text-white/20 text-xs mt-0.5">Тихий пинг при новом сообщении</div>
+                  </div>
+                  <button onClick={()=>{
+                    const next=!notifSoundEnabled;
+                    setNotifSoundEnabled(next);
+                    notifSoundEnabledRef.current=next;
+                    try{localStorage.setItem('whispr_sound',next?'on':'off');}catch(e){}
+                  }} className={`relative w-11 h-6 rounded-full transition-all ${notifSoundEnabled?'bg-green-500':'bg-white/15'}`}>
+                    <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${notifSoundEnabled?'right-0.5':'left-0.5'}`}/>
+                  </button>
+                </div>
+
+                {/* Экспорт чата */}
+                {activeChat&&(
+                  <div className="px-4 py-3 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+                    <div className="text-white/40 text-xs uppercase tracking-widest mb-2">Экспорт текущего чата</div>
+                    <div className="flex gap-2">
+                      {['txt','json'].map(fmt=>(
+                        <button key={fmt} onClick={()=>{
+                          const chatId = activeChat.type==='direct'
+                            ? [activeChat.id, currentUser?.username].sort().join('_')
+                            : activeChat.type==='group'
+                            ? `group_${activeChat.id}`
+                            : `channel_${activeChat.id}`;
+                          socketRef.current?.emit('export_chat',{chatId,format:fmt},res=>{
+                            if(!res.success){showToast('Ошибка экспорта');return;}
+                            const blob=new Blob([res.data],{type:fmt==='json'?'application/json':'text/plain'});
+                            const url=URL.createObjectURL(blob);
+                            const a=document.createElement('a');
+                            a.href=url;a.download=`whispr_chat_${activeChat.id}.${fmt}`;a.click();
+                            URL.revokeObjectURL(url);
+                            showToast(`Экспортировано ${res.count} сообщений`);
+                          });
+                        }} className="flex-1 py-2 rounded-lg text-white/50 text-sm hover:bg-white/5 transition-colors uppercase font-mono" style={{border:'1px solid rgba(255,255,255,0.07)'}}>
+                          .{fmt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2370,9 +2523,24 @@ export default function WhisprPro() {
                 </div>
               ))}</div></>
             )}
-                        {adminTab==='features'&&(
+            {adminTab==='features'&&(
               <div className="space-y-3">
-                <p className="text-white/30 text-xs mb-4">Отключённые функции показывают пользователям сообщение о тех.работах</p>
+                {/* 🔧 Режим тех.работ */}
+                <div className="flex items-center justify-between px-4 py-3 rounded-xl" style={{background:maintenanceMode?'rgba(239,68,68,0.07)':'rgba(255,255,255,0.03)',border:maintenanceMode?'1px solid rgba(239,68,68,0.2)':'1px solid rgba(255,255,255,0.06)'}}>
+                  <div>
+                    <span className="text-white/80 text-sm font-medium">🔧 Режим тех.работ</span>
+                    <div className="text-white/25 text-xs mt-0.5">{maintenanceMode?'Сайт недоступен для пользователей':'Сайт работает в штатном режиме'}</div>
+                  </div>
+                  <button onClick={()=>{
+                    socketRef.current?.emit('admin_set_maintenance',{enabled:!maintenanceMode},res=>{
+                      if(res.success)setMaintenanceMode(res.enabled);
+                      else showToast('Ошибка');
+                    });
+                  }} className={`relative w-11 h-6 rounded-full transition-all ${maintenanceMode?'bg-red-500':'bg-white/15'}`}>
+                    <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${maintenanceMode?'right-0.5':'left-0.5'}`}/>
+                  </button>
+                </div>
+                <p className="text-white/30 text-xs mb-1">Отключённые функции показывают пользователям сообщение о тех.работах</p>
                 {[
                   ['calls','📞 Звонки (аудио и видео)'],
                   ['voiceMessages','🎤 Голосовые сообщения'],
