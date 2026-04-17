@@ -1104,6 +1104,8 @@ io.on('connection', (socket) => {
   socket.on('admin_get_maintenance', (cb) => {
     cb({ success: true, enabled: maintenanceMode });
   });
+
+  socket.on('admin_get_channels', async (cb) => {
     const me = requireAuth(cb); if (!me) return;
     try {
       const user = await User.findOne({ username: me });
