@@ -1743,12 +1743,9 @@ export default function WhisprPro() {
                           </span>)
                     : activeChat.type==='channel'
                     ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>📢 Канал · {activeChatData?.subscribers?.length||0} подп.</span>
-                    : (() => {
-                        const oc = groupOnlineCount[activeChat.id];
-                        return oc
-                          ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}><span style={{color:'#4ade80'}}>{oc.online}</span> из {oc.total} онлайн</span>
-                          : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>{activeChatData?.members?.length||0} участников</span>;
-                      })()}
+                    : groupOnlineCount[activeChat.id]
+                      ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}><span style={{color:'#4ade80'}}>{groupOnlineCount[activeChat.id].online}</span> из {groupOnlineCount[activeChat.id].total} онлайн</span>
+                      : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>{activeChatData?.members?.length||0} участников</span>}
                 </div>
               </div>
 
@@ -1802,22 +1799,16 @@ export default function WhisprPro() {
                 )}
               </div>
             )}
-            {activeChat.type==='direct' && (() => {
-              const me = currentUser?.username;
-              const cid = me ? [activeChat.id, me].sort().join('_') : null;
-              const pm = cid ? pinnedDirectMsg[cid] : null;
-              if (!pm) return null;
-              return (
-                <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2" style={{borderBottom:'1px solid rgba(255,255,255,0.05)',background:'rgba(255,255,255,0.02)'}}>
-                  <Pin className="w-3.5 h-3.5 text-purple-400/50 flex-shrink-0"/>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[10px] text-white/20 uppercase tracking-wider">Закреплено</div>
-                    <div className="text-sm text-white/55 truncate">{pm.type==='text'?pm.text:pm.type==='voice'?'🎤 Голосовое':pm.type==='image'?'🖼 Фото':'Сообщение'}</div>
-                  </div>
-                  <button onClick={()=>{if(cid){socketRef.current?.emit('pin_direct_message',{chatId:cid,messageId:null},()=>{});setPinnedDirectMsg(p=>({...p,[cid]:null}));}}} className="p-1 hover:bg-white/5 rounded-lg transition-colors flex-shrink-0"><PinOff className="w-3.5 h-3.5 text-white/25"/></button>
+            {activeChat.type==='direct' && pinnedDirectMsg[[activeChat.id, currentUser?.username].sort().join('_')] && (
+              <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2" style={{borderBottom:'1px solid rgba(255,255,255,0.05)',background:'rgba(255,255,255,0.02)'}}>
+                <Pin className="w-3.5 h-3.5 text-purple-400/50 flex-shrink-0"/>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] text-white/20 uppercase tracking-wider">Закреплено</div>
+                  <div className="text-sm text-white/55 truncate">{(pinnedDirectMsg[[activeChat.id, currentUser?.username].sort().join('_')]||{}).type==='text'?(pinnedDirectMsg[[activeChat.id, currentUser?.username].sort().join('_')]||{}).text:'Сообщение'}</div>
                 </div>
-              );
-            })()}
+                <button onClick={()=>{const cid=[activeChat.id,currentUser?.username].sort().join('_');socketRef.current?.emit('pin_direct_message',{chatId:cid,messageId:null},()=>{});setPinnedDirectMsg(p=>({...p,[cid]:null}));}} className="p-1 hover:bg-white/5 rounded-lg transition-colors flex-shrink-0"><PinOff className="w-3.5 h-3.5 text-white/25"/></button>
+              </div>
+            )}
             {/* Messages */}
             <div style={{flex:1,overflowY:'auto',padding:'1.25rem 1.5rem',display:'flex',flexDirection:'column',gap:'0.25rem'}}>
               {chatMessages.map((msg,idx)=>{
@@ -1890,8 +1881,8 @@ export default function WhisprPro() {
                           {/* Превью ссылки */}
                           {msg.type==='text'&&msg.text&&/https?:\/\//.test(msg.text)&&(()=>{
                             const msgId = msg._id||msg.id;
-                            if (!linkPreviews[msgId]) { setTimeout(()=>fetchLinkPreview(msgId,msg.text),100); }
                             const lp = linkPreviews[msgId];
+                            if (!lp) { fetchLinkPreview(msgId,msg.text); return null; }
                             if (!lp||lp.loading||lp.failed) return null;
                             return (
                               <a href={lp.url} target="_blank" rel="noopener noreferrer"
@@ -2228,29 +2219,17 @@ export default function WhisprPro() {
               <Pin className="w-4 h-4 text-purple-400"/>{pinnedMessage?.[activeChat?.id]?._id===(msgMenu.msg._id||msgMenu.msg.id)?'Открепить':'Закрепить'}
             </button>
           )}
-          {activeChat?.type==='direct'&&(()=>{
+          {activeChat?.type==='direct' && (()=>{
             const me=currentUser?.username;
             const cid=me?[activeChat.id,me].sort().join('_'):null;
-            const isAlreadyPinned=cid&&pinnedDirectMsg[cid]?._id===(msgMenu.msg._id||msgMenu.msg.id);
-            return(
-              <button onClick={()=>{
-                const mid=msgMenu.msg._id||msgMenu.msg.id;
-                setMsgMenu(null);
-                if(isAlreadyPinned){
-                  setPinnedDirectMsg(p=>({...p,[cid]:null}));
-                  socketRef.current?.emit('pin_direct_message',{chatId:cid,messageId:null},()=>{});
-                } else {
-                  socketRef.current?.emit('pin_direct_message',{chatId:cid,messageId:mid},res=>{
-                    if(res.success){
-                      setPinnedDirectMsg(p=>({...p,[cid]:msgMenu.msg}));
-                      showToast('Сообщение закреплено');
-                    }
-                  });
-                }
-              }} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors">
-                <Pin className="w-4 h-4 text-purple-400"/>{isAlreadyPinned?'Открепить':'Закрепить'}
-              </button>
-            );
+            const isAlreadyPinned=cid&&pinnedDirectMsg[cid]?._id===(msgMenu?.msg?._id||msgMenu?.msg?.id);
+            return <button onClick={()=>{
+              const mid=msgMenu?.msg?._id||msgMenu?.msg?.id;
+              setMsgMenu(null);
+              if(!cid)return;
+              if(isAlreadyPinned){setPinnedDirectMsg(p=>({...p,[cid]:null}));socketRef.current?.emit('pin_direct_message',{chatId:cid,messageId:null},()=>{});}
+              else{socketRef.current?.emit('pin_direct_message',{chatId:cid,messageId:mid},res=>{if(res.success){setPinnedDirectMsg(p=>({...p,[cid]:msgMenu?.msg}));showToast('Закреплено');}});}
+            }} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><Pin className="w-4 h-4 text-purple-400"/>{isAlreadyPinned?'Открепить':'Закрепить'}</button>;
           })()}
           {msgMenu.isOwn&&msgMenu.msg.type!=='voice'&&<button onClick={()=>startEdit(msgMenu.msg)} className="w-full px-4 py-2.5 text-left text-white/60 text-sm hover:bg-white/5 flex items-center gap-3 transition-colors"><Pencil className="w-4 h-4 text-yellow-400"/>Редактировать</button>}
           {msgMenu.isOwn&&<button onClick={()=>deleteMsg(msgMenu.msg,true)} className="w-full px-4 py-2.5 text-left text-red-400/80 text-sm hover:bg-red-500/5 flex items-center gap-3 transition-colors"><Trash2 className="w-4 h-4"/>Удалить у всех</button>}
