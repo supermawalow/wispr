@@ -135,11 +135,6 @@ function LogoText({ size = 'xl', sub = false }) {
         >Whispr</text>
       </svg>
       {sub && <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: 11, letterSpacing: '0.35em', marginTop: 6, textTransform: 'uppercase', fontWeight: 400 }}>MESSENGER</div>}
-    {/* Floating reactions */}
-    {floatingReactions.map(r => (
-      <FloatingReaction key={r.id} emoji={r.emoji} x={r.x} y={r.y}
-        onDone={() => setFloatingReactions(p => p.filter(x => x.id !== r.id))}/>
-    ))}
     </div>
   );
 }
