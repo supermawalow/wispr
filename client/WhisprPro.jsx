@@ -135,6 +135,11 @@ function LogoText({ size = 'xl', sub = false }) {
         >Whispr</text>
       </svg>
       {sub && <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: 11, letterSpacing: '0.35em', marginTop: 6, textTransform: 'uppercase', fontWeight: 400 }}>MESSENGER</div>}
+    {/* Floating reactions */}
+    {floatingReactions.map(r => (
+      <FloatingReaction key={r.id} emoji={r.emoji} x={r.x} y={r.y}
+        onDone={() => setFloatingReactions(p => p.filter(x => x.id !== r.id))}/>
+    ))}
     </div>
   );
 }
@@ -336,6 +341,23 @@ function PollMessage({ poll, text, currentUser, T, onVote, onClose }) {
   );
 }
 
+
+function FloatingReaction({ emoji, x, y, onDone }) {
+  const [visible, setVisible] = React.useState(true);
+  React.useEffect(() => {
+    const t = setTimeout(() => { setVisible(false); onDone && onDone(); }, 1200);
+    return () => clearTimeout(t);
+  }, []);
+  if (!visible) return null;
+  return (
+    <div style={{
+      position:'fixed', left:x, top:y, zIndex:9999,
+      fontSize:28, pointerEvents:'none', userSelect:'none',
+      animation:'floatUp 1.2s ease-out forwards',
+    }}>{emoji}</div>
+  );
+}
+
 export default function WhisprPro() {
   const [socket, setSocket] = useState(null);
   const socketRef = useRef(null);
@@ -474,6 +496,12 @@ export default function WhisprPro() {
   const [viewingProfile, setViewingProfile] = useState(null);
   // Счётчики непрочитанных
   const [unreadCounts, setUnreadCounts] = useState({});
+  const [floatingReactions, setFloatingReactions] = useState([]);
+  const [contactLastSeen, setContactLastSeen] = useState({});
+  const [folders, setFolders] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('whispr_folders')||'[{"id":"all","name":"Все","icon":"💬"},{"id":"direct","name":"Личные","icon":"👤"},{"id":"groups","name":"Группы","icon":"👥"},{"id":"channels","name":"Каналы","icon":"📢"}]'); } catch { return []; }
+  });
+  const [activeFolder, setActiveFolder] = useState('all'); // [{id,emoji,x,y}]
   // Статус пользователя
   // status removed
   // Каналы
@@ -1063,7 +1091,16 @@ export default function WhisprPro() {
   };
   const stopRecording = () => { mediaRecorderRef.current?.stop(); clearInterval(recordingTimerRef.current); setIsRecording(false); setRecordingTime(0); };
   const toggleAudio = (id,data)=>{if(playingAudio===id){setPlayingAudio(null);return;}setPlayingAudio(id);const a=new Audio(data);a.onended=()=>setPlayingAudio(null);a.play();};
-  const handleReaction = (mid,emoji)=>{socketRef.current?.emit('add_reaction',{messageId:mid,emoji},()=>{});setHoveredMsg(null);};
+  const handleReaction = (mid, emoji, e) => {
+    socketRef.current?.emit('add_reaction',{messageId:mid,emoji},()=>{});
+    setHoveredMsg(null);
+    // Spawn floating reaction
+    const rect = e?.target?.getBoundingClientRect?.();
+    const x = rect ? rect.left + rect.width/2 - 14 : window.innerWidth/2;
+    const y = rect ? rect.top - 10 : window.innerHeight/2;
+    const id = Date.now() + Math.random();
+    setFloatingReactions(p => [...p, {id, emoji, x, y}]);
+  };
   const handleCreateGroup = e=>{e.preventDefault();if(!newGroupName.trim())return;socketRef.current?.emit('create_group',{name:newGroupName,description:newGroupDesc,members:selectedMembers},res=>{if(res.success){setShowCreateGroup(false);setNewGroupName('');setNewGroupDesc('');setSelectedMembers([]);openGroupChat(res.group);}});};
   const handleLeaveGroup = ()=>{if(!confirm('Покинуть группу?'))return;socketRef.current?.emit('leave_group',activeChat.id,res=>{if(res.success){setGroups(p=>p.filter(g=>g._id!==activeChat.id));setActiveChat(null);setShowGroupInfo(false);}});};
   const searchAddMember = q=>{setAddMemberQuery(q);if(q.length<2){setAddMemberResults([]);return;}socketRef.current?.emit('search_users',q,res=>{if(res.success)setAddMemberResults(res.results);});};
@@ -1416,6 +1453,17 @@ export default function WhisprPro() {
     setMsgMenu(null);
   };
 
+  const fmtLastSeen = (date) => {
+    if (!date) return '';
+    const d = new Date(date), now = new Date();
+    const diff = (now - d) / 1000;
+    if (diff < 60) return 'только что';
+    if (diff < 3600) return `${Math.floor(diff/60)} мин. назад`;
+    if (diff < 86400) return `сегодня в ${d.toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})}`;
+    if (diff < 172800) return `вчера в ${d.toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})}`;
+    return d.toLocaleDateString('ru',{day:'numeric',month:'long'});
+  };
+
   const fmtTime = ts=>{const d=new Date(ts),n=new Date();return d.toDateString()===n.toDateString()?d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):d.toLocaleDateString('ru-RU',{day:'numeric',month:'short'});};
   const fmtDur = s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
 
@@ -1576,8 +1624,23 @@ export default function WhisprPro() {
             </div>);
           })}
 
-          {contacts.length>0&&<div className="text-[10px] font-semibold text-white/15 uppercase tracking-[0.2em] px-2 pt-2 pb-1.5">Контакты</div>}
-          {contacts.map((c,i)=>{
+          {/* ── Folder tabs ── */}
+          <div className="flex gap-1 px-2 pb-3 pt-1 overflow-x-auto" style={{scrollbarWidth:'none',msOverflowStyle:'none'}}>
+            {folders.map(f=>(
+              <button key={f.id} onClick={()=>setActiveFolder(f.id)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold whitespace-nowrap transition-all flex-shrink-0"
+                style={{
+                  background: activeFolder===f.id ? `${T.a}22` : 'rgba(255,255,255,0.04)',
+                  color: activeFolder===f.id ? T.a : 'rgba(255,255,255,0.3)',
+                  border: activeFolder===f.id ? `1px solid ${T.a}35` : '1px solid transparent',
+                }}>
+                <span className="text-xs">{f.icon}</span>{f.name}
+              </button>
+            ))}
+          </div>
+
+          {contacts.length>0&&(activeFolder==='all'||activeFolder==='direct')&&<div className="text-[10px] font-semibold text-white/15 uppercase tracking-[0.2em] px-2 pt-2 pb-1.5">Контакты</div>}
+          {(activeFolder==='all'||activeFolder==='direct')&&contacts.map((c,i)=>{
             const key=c.username;
             const lm=lastMessages[key];
             const isPinned=pinnedChats.includes(key);
@@ -1605,7 +1668,7 @@ export default function WhisprPro() {
             </div>
           );})}
           {groups.length>0&&<div className="text-[10px] font-semibold text-white/15 uppercase tracking-[0.2em] px-2 pt-3 pb-1.5">Группы</div>}
-          {groups.map((g,i)=>{
+          {(activeFolder==='all'||activeFolder==='groups')&&groups.map((g,i)=>{
             const key=`group_${g._id}`;
             const lm=lastMessages[key];
             return(
@@ -1629,7 +1692,7 @@ export default function WhisprPro() {
           );})}
           {/* Каналы */}
           {channels.length>0&&<div className="text-[10px] font-semibold text-white/15 uppercase tracking-[0.2em] px-2 pt-3 pb-1.5 flex items-center gap-2"><Tv2 className="w-3 h-3"/>Каналы</div>}
-          {channels.map((ch,i)=>(
+          {(activeFolder==='all'||activeFolder==='channels')&&channels.map((ch,i)=>(
             <div key={ch._id} onClick={()=>openChannelChat(ch)}
               className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-150"
               style={{
@@ -1671,7 +1734,13 @@ export default function WhisprPro() {
                       ? <span style={{color:'rgba(239,68,68,0.4)',fontSize:'12px'}}>заблокирован</span>
                       : (activeChatData?.isOnline
                         ? <span style={{color:'#4ade80',fontSize:'12px'}} className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0"></span>онлайн</span>
-                        : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>не в сети</span>)
+                        : <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>
+                            {contactLastSeen[activeChat.id]
+                              ? `был(а) ${fmtLastSeen(contactLastSeen[activeChat.id])}`
+                              : activeChatData?.lastSeen
+                                ? `был(а) ${fmtLastSeen(activeChatData.lastSeen)}`
+                                : 'не в сети'}
+                          </span>)
                     : activeChat.type==='channel'
                     ? <span style={{color:'rgba(255,255,255,0.25)',fontSize:'12px'}}>📢 Канал · {activeChatData?.subscribers?.length||0} подп.</span>
                     : (() => {
@@ -1767,10 +1836,26 @@ export default function WhisprPro() {
                   <React.Fragment key={mid}>
                   {showDateSep&&<div className="flex justify-center my-4" style={{animation:'fadeIn 0.3s ease'}}><span className="px-4 py-1.5 rounded-full text-xs font-medium" style={{background:'rgba(255,255,255,0.05)',color:'rgba(255,255,255,0.25)',backdropFilter:'blur(8px)',border:'1px solid rgba(255,255,255,0.06)'}}>{dateLbl}</span></div>}
                   <div className={`flex items-end gap-2 ${isOwn?'flex-row-reverse':'flex-row'} ${multiSelect?'cursor-pointer':''}`}
-                    style={{animation:isOwn&&idx===chatMessages.length-1?'sendBubble 0.38s cubic-bezier(0.34,1.4,0.64,1) both':`msgIn 0.18s cubic-bezier(0.25,0.46,0.45,0.94) ${Math.min(idx,15)*0.012}s both`,background:multiSelect&&selectedMsgs.includes(mid)?'rgba(255,255,255,0.04)':'transparent',borderRadius:8,padding:multiSelect?'2px 4px':0,transition:'background 0.15s'}}
+                    style={{animation:isOwn&&idx===chatMessages.length-1?'sendBubble 0.38s cubic-bezier(0.34,1.4,0.64,1) both':`msgIn 0.18s cubic-bezier(0.25,0.46,0.45,0.94) ${Math.min(idx,15)*0.012}s both`,background:multiSelect&&selectedMsgs.includes(mid)?'rgba(255,255,255,0.04)':'transparent',borderRadius:8,padding:multiSelect?'2px 4px':0,transition:'background 0.15s',touchAction:'pan-y',userSelect:'none'}}
                     onClick={multiSelect?()=>setSelectedMsgs(p=>p.includes(mid)?p.filter(x=>x!==mid):[...p,mid]):undefined}
                     onMouseEnter={()=>{if(!multiSelect){clearTimeout(hoverTimeoutRef.current);setHoveredMsg(mid);}}}
-                    onMouseLeave={()=>{hoverTimeoutRef.current=setTimeout(()=>setHoveredMsg(null),300);}}>
+                    onMouseLeave={()=>{hoverTimeoutRef.current=setTimeout(()=>setHoveredMsg(null),300);}}
+                    onPointerDown={e=>{
+                      if(multiSelect||e.pointerType!=='touch') return;
+                      const startX=e.clientX; const el=e.currentTarget; let swiped=false;
+                      const onMove=mv=>{
+                        const dx=mv.clientX-startX;
+                        if(dx>10&&!swiped){el.style.transform=`translateX(${Math.min(dx*0.35,28)}px)`;el.style.transition='none';}
+                      };
+                      const onUp=up=>{
+                        el.style.transform='';el.style.transition='transform 0.22s ease';
+                        window.removeEventListener('pointermove',onMove);
+                        window.removeEventListener('pointerup',onUp);
+                        if(up.clientX-startX>55){swiped=true;setReplyTo(msg);}
+                      };
+                      window.addEventListener('pointermove',onMove,{passive:true});
+                      window.addEventListener('pointerup',onUp,{once:true});
+                    }}>
                     {multiSelect&&<div className="flex-shrink-0 w-5 h-5 rounded-full border flex items-center justify-center transition-all" style={{borderColor:selectedMsgs.includes(mid)?T.a:'rgba(255,255,255,0.2)',background:selectedMsgs.includes(mid)?T.a:'transparent'}}>{selectedMsgs.includes(mid)&&<Check className="w-3 h-3 text-white"/>}</div>}
                     {!isOwn&&activeChat.type==='group'&&<div className="cursor-pointer hover:opacity-80 transition-opacity" onClick={()=>handleViewProfile(msg.from)}><Avatar username={msg.from} displayName={msg.from} avatar={avatars[msg.from]} size="sm"/></div>}
                     <div className="relative max-w-sm">
@@ -1780,7 +1865,7 @@ export default function WhisprPro() {
                           style={{background:'rgba(10,10,16,0.97)',border:'1px solid rgba(255,255,255,0.08)',animation:'popIn 0.18s cubic-bezier(0.34,1.8,0.64,1)',backdropFilter:'blur(12px)'}}
                           onMouseEnter={()=>{clearTimeout(hoverTimeoutRef.current);setHoveredMsg(mid);}}
                           onMouseLeave={()=>{hoverTimeoutRef.current=setTimeout(()=>setHoveredMsg(null),300);}}>
-                          {EMOJI_LIST.map(e=><button key={e} onClick={()=>handleReaction(mid,e)} className="text-base hover:scale-125 transition-transform px-0.5">{e}</button>)}
+                          {EMOJI_LIST.map(e=><button key={e} onClick={(ev)=>handleReaction(mid,e,ev)} className="text-base hover:scale-125 transition-transform px-0.5">{e}</button>)}
                           <button onClick={ev=>{ev.stopPropagation();setMsgMenu({msgId:mid,msg,isOwn});}} className="ml-1 p-1 hover:bg-white/8 rounded-lg transition-colors"><MoreVertical className="w-3.5 h-3.5 text-white/40"/></button>
                         </div>
                       )}
@@ -2892,6 +2977,11 @@ const CSS = `
   @keyframes listItem { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
   @keyframes msgIn { from{opacity:0;transform:translateY(7px) scale(0.96)} to{opacity:1;transform:translateY(0) scale(1)} }
   @keyframes sendBubble { 0%{opacity:0;transform:translateY(16px) scale(0.85)} 50%{transform:translateY(-5px) scale(1.04)} 75%{transform:translateY(2px) scale(0.98)} 100%{opacity:1;transform:translateY(0) scale(1)} }
+  @keyframes floatUp {
+    0%   { opacity:1; transform:translateY(0) scale(1); }
+    70%  { opacity:1; transform:translateY(-60px) scale(1.3); }
+    100% { opacity:0; transform:translateY(-90px) scale(0.8); }
+  }
   @keyframes pulse-soft { 0%,100%{opacity:1} 50%{opacity:0.5} }
 
   input::placeholder{transition:opacity 0.2s} input:focus::placeholder{opacity:0.4}
