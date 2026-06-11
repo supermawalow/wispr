@@ -10,6 +10,23 @@ import {
 } from 'lucide-react';
 
 const SERVER_URL = 'https://whispr-server-u5zy.onrender.com';
+
+const EMAILJS_SERVICE  = 'service_f0255vm';
+const EMAILJS_TEMPLATE = 'template_ahmo26e';
+const EMAILJS_PUBLIC   = 'Xlx14VMkAYmLsI7n1';
+
+async function sendEmailCode(toEmail, code, userName) {
+  return fetch('https://api.emailjs.com/api/v1.0/email/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      service_id:  EMAILJS_SERVICE,
+      template_id: EMAILJS_TEMPLATE,
+      user_id:     EMAILJS_PUBLIC,
+      template_params: { to_email: toEmail, code, user_name: userName }
+    })
+  });
+}
 const EMOJI_LIST = ['❤️','😂','😮','😢','👍','🔥'];
 
 const THEMES = {
