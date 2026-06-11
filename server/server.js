@@ -40,6 +40,9 @@ const userSchema = new mongoose.Schema({
   lastSeen:     { type: Date, default: null }, // NEW
   blockedUsers: [{ type: String }],
   isBot:        { type: Boolean, default: false },
+  email:        { type: String, default: null },
+  emailVerified:{ type: Boolean, default: false },
+  twoFaEnabled: { type: Boolean, default: false },
   createdAt:    { type: Date, default: Date.now }
 });
 
@@ -196,6 +199,7 @@ mongoose.connection.once('open', async () => {
 
 const onlineUsers = new Map(); // socketId -> username
 const userSockets = new Map(); // username -> socketId
+const pendingCodes = new Map(); // email -> { code, username, expiresAt, type } (type: 'register'|'2fa'|'change_email')
 // Feature flags (in-memory, persisted to env or reset on restart)
 let siteFeatures = { calls:true, voiceMessages:true, videoMessages:true, fileUploads:true, gifSearch:true, aiChat:true, groupCreation:true, channelCreation:true };
 let maintenanceMode = false; // Режим тех.работ — отключает сайт для обычных пользователей
@@ -253,6 +257,13 @@ io.on('connection', (socket) => {
       if (user.password !== password) return cb({ success: false, error: 'Неверный пароль' });
       if (user.isBlocked) return cb({ success: false, error: 'Аккаунт заблокирован' });
       if (maintenanceMode && !user.isAdmin) return cb({ success: false, error: '🔧 Технические работы. Сайт временно недоступен. Попробуйте позже.' });
+
+      // 2FA: если включена — не логиним сразу, возвращаем флаг
+      if (user.twoFaEnabled && user.email) {
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        pendingCodes.set(user.email, { code, username: user.username, expiresAt: Date.now() + 10 * 60 * 1000, type: '2fa_login' });
+        return cb({ success: false, needs2fa: true, email: user.email, code, username: user.username });
+      }
 
       const oldSocket = userSockets.get(user.username);
       if (oldSocket) io.to(oldSocket).emit('force_disconnect', { reason: 'Новый вход с другого устройства' });
@@ -1508,6 +1519,119 @@ io.on('connection', (socket) => {
       const media = await Message.find(filter).sort({ timestamp: -1 }).limit(200);
       cb({ success: true, media });
     } catch(e) { cb({ success: false, media: [] }); }
+  });
+
+  // ── ОТПРАВИТЬ КОД НА ПОЧТУ ──
+  socket.on('send_verify_code', async (data, cb) => {
+    try {
+      const { email, username, type } = data; // type: 'register' | '2fa' | 'change_email'
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+        return cb({ success: false, error: 'Неверный формат email' });
+
+      // Проверяем что email не занят другим пользователем
+      if (type === 'register' || type === 'change_email') {
+        const existing = await User.findOne({ email: email.toLowerCase(), username: { $ne: username?.toLowerCase() } });
+        if (existing) return cb({ success: false, error: 'Email уже используется другим аккаунтом' });
+      }
+
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = Date.now() + 10 * 60 * 1000; // 10 минут
+      pendingCodes.set(email.toLowerCase(), { code, username: username?.toLowerCase(), expiresAt, type });
+
+      // Чистим просроченные коды
+      for (const [k, v] of pendingCodes.entries()) if (Date.now() > v.expiresAt) pendingCodes.delete(k);
+
+      cb({ success: true, code, email: email.toLowerCase() }); // код отправляем клиенту, тот шлёт через EmailJS
+    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  });
+
+  // ── ПРОВЕРИТЬ КОД (регистрация / смена email) ──
+  socket.on('verify_email_code', async (data, cb) => {
+    try {
+      const { email, code, username, displayName, password } = data;
+      const pending = pendingCodes.get(email.toLowerCase());
+      if (!pending) return cb({ success: false, error: 'Код не найден или истёк. Запросите новый.' });
+      if (Date.now() > pending.expiresAt) { pendingCodes.delete(email.toLowerCase()); return cb({ success: false, error: 'Код истёк. Запросите новый.' }); }
+      if (pending.code !== code.trim()) return cb({ success: false, error: 'Неверный код' });
+
+      pendingCodes.delete(email.toLowerCase());
+
+      if (pending.type === 'register') {
+        // Финальная регистрация
+        if (await User.findOne({ username: username.toLowerCase() })) return cb({ success: false, error: 'Username уже занят' });
+        const user = await User.create({ username: username.toLowerCase(), displayName, password, contacts: ['whispr'], email: email.toLowerCase(), emailVerified: true });
+        cb({ success: true, user: { ...user.toObject(), password: undefined } });
+      } else if (pending.type === 'change_email') {
+        const me = onlineUsers.get(socket.id);
+        if (!me) return cb({ success: false, error: 'Не авторизован' });
+        await User.updateOne({ username: me }, { email: email.toLowerCase(), emailVerified: true });
+        cb({ success: true });
+      }
+    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  });
+
+  // ── ВКЛЮЧИТЬ / ВЫКЛЮЧИТЬ 2FA ──
+  socket.on('toggle_2fa', async (data, cb) => {
+    const me = requireAuth(cb); if (!me) return;
+    try {
+      const { enable, code, email } = data;
+      const user = await User.findOne({ username: me });
+      if (!user) return cb({ success: false, error: 'Пользователь не найден' });
+      if (!user.email || !user.emailVerified) return cb({ success: false, error: 'Сначала привяжи подтверждённый email' });
+
+      if (enable) {
+        // Проверяем код
+        const pending = pendingCodes.get(user.email);
+        if (!pending || pending.type !== '2fa') return cb({ success: false, error: 'Сначала запроси код подтверждения' });
+        if (Date.now() > pending.expiresAt) { pendingCodes.delete(user.email); return cb({ success: false, error: 'Код истёк' }); }
+        if (pending.code !== code.trim()) return cb({ success: false, error: 'Неверный код' });
+        pendingCodes.delete(user.email);
+        await User.updateOne({ username: me }, { twoFaEnabled: true });
+        cb({ success: true, twoFaEnabled: true });
+      } else {
+        // Отключение тоже требует код
+        const pending = pendingCodes.get(user.email);
+        if (!pending || pending.type !== '2fa_disable') return cb({ success: false, error: 'Сначала запроси код подтверждения' });
+        if (Date.now() > pending.expiresAt) { pendingCodes.delete(user.email); return cb({ success: false, error: 'Код истёк' }); }
+        if (pending.code !== code.trim()) return cb({ success: false, error: 'Неверный код' });
+        pendingCodes.delete(user.email);
+        await User.updateOne({ username: me }, { twoFaEnabled: false });
+        cb({ success: true, twoFaEnabled: false });
+      }
+    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
+  });
+
+  // ── ВХОД С 2FA ── (проверка кода после обычного логина)
+  socket.on('verify_2fa_login', async (data, cb) => {
+    try {
+      const { username, code } = data;
+      const user = await User.findOne({ username: username.toLowerCase() });
+      if (!user) return cb({ success: false, error: 'Пользователь не найден' });
+      const pending = pendingCodes.get(user.email);
+      if (!pending || pending.type !== '2fa_login') return cb({ success: false, error: 'Код не найден. Войдите снова.' });
+      if (Date.now() > pending.expiresAt) { pendingCodes.delete(user.email); return cb({ success: false, error: 'Код истёк. Войдите снова.' }); }
+      if (pending.code !== code.trim()) return cb({ success: false, error: 'Неверный код' });
+      pendingCodes.delete(user.email);
+
+      // Авторизуем
+      const oldSocket = userSockets.get(user.username);
+      if (oldSocket) io.to(oldSocket).emit('force_disconnect', { reason: 'Новый вход с другого устройства' });
+      onlineUsers.set(socket.id, user.username);
+      userSockets.set(user.username, socket.id);
+
+      const contactDocs = await User.find({ username: { $in: user.contacts } });
+      const contacts = contactDocs.map(c => ({
+        username: c.username, displayName: c.displayName, bio: c.bio||'',
+        avatar: c.avatar, isOnline: userSockets.has(c.username), isBlocked: c.isBlocked,
+        verified: c.verified||false, isBot: c.isBot||false,
+        isBlockedByMe: (user.blockedUsers||[]).includes(c.username)
+      }));
+      const groups = await Group.find({ members: user.username });
+      await Message.updateMany({ to: user.username, delivered: false }, { delivered: true });
+      if (!user.hideOnline) io.emit('user_status_change', { username: user.username, isOnline: true, status: user.status || 'online' });
+      const userChannels = await Channel.find({ subscribers: user.username });
+      cb({ success: true, user: { ...user.toObject(), password: undefined }, contacts, groups, channels: userChannels, pinnedChats: user.pinnedChats||[] });
+    } catch (e) { cb({ success: false, error: 'Ошибка сервера' }); }
   });
 
   // ── РАССЫЛКА ОТ ОФИЦИАЛЬНОГО БОТА ──

@@ -438,6 +438,19 @@ export default function WhisprPro() {
   const pendingIceCandidatesRef = useRef([]);
 
   // Админ
+  // ── Email / 2FA state ──
+  const [regEmail, setRegEmail] = useState('');
+  const [authStep, setAuthStep] = useState('form'); // 'form' | 'verify_email' | '2fa'
+  const [verifyCode, setVerifyCode] = useState('');
+  const [verifyError, setVerifyError] = useState('');
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [pendingRegData, setPendingRegData] = useState(null); // {username,displayName,password,email}
+  const [pending2faData, setPending2faData] = useState(null); // {username, email, code}
+  const [twoFaToggleCode, setTwoFaToggleCode] = useState('');
+  const [twoFaToggleStep, setTwoFaToggleStep] = useState('idle'); // 'idle'|'sent'
+  const [twoFaToggleLoading, setTwoFaToggleLoading] = useState(false);
+  const [twoFaToggleError, setTwoFaToggleError] = useState('');
+
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [adminTab, setAdminTab] = useState('users');
   const [broadcastText, setBroadcastText] = useState('');
@@ -896,8 +909,77 @@ export default function WhisprPro() {
   // Плавный переход чата
   useEffect(()=>{if(activeChat){setChatVisible(false);setTimeout(()=>setChatVisible(true),50);}},[activeChat?.id]);
 
-  const handleRegister = e => { e.preventDefault();setAuthError('');socketRef.current?.emit('register',{username,displayName,password},res=>{if(res.success)handleLogin(e);else setAuthError(res.error);}); };
-  const handleLogin = e => { e.preventDefault();setAuthError('');socketRef.current?.emit('login',{username,password},res=>{if(res.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){/* storage unavailable */}if(socketRef.current)socketRef.current._me=res.user.username;setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});if(res.user.avatar)av[res.user.username]=res.user.avatar;setAvatars(av);setIsAuthenticated(true);}else setAuthError(res.error);}); };
+  const finalizeLogin = (res) => {
+    try{localStorage.setItem('whispr_creds',JSON.stringify({u:res.user.username,p:null}));}catch(e){}
+    if(socketRef.current)socketRef.current._me=res.user.username;
+    setCurrentUser(res.user);setContacts(res.contacts||[]);setGroups(res.groups||[]);setChannels(res.channels||[]);
+    const av={};(res.contacts||[]).forEach(c=>{if(c.avatar)av[c.username]=c.avatar;});
+    if(res.user.avatar)av[res.user.username]=res.user.avatar;
+    setAvatars(av);setIsAuthenticated(true);
+  };
+
+  const handleRegister = async e => {
+    e.preventDefault(); setAuthError('');
+    if(!username.trim()||!displayName.trim()||!password.trim()||!regEmail.trim()) return setAuthError('Заполни все поля');
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regEmail)) return setAuthError('Неверный формат email');
+    setVerifyLoading(true);
+    socketRef.current?.emit('send_verify_code',{email:regEmail.toLowerCase(),username:username.toLowerCase(),type:'register'},async res=>{
+      setVerifyLoading(false);
+      if(!res.success){setAuthError(res.error);return;}
+      try{ await sendEmailCode(regEmail, res.code, displayName||username); }catch(e){ console.error('EmailJS error',e); }
+      setPendingRegData({username:username.toLowerCase(),displayName,password,email:regEmail.toLowerCase()});
+      setAuthStep('verify_email');
+      setVerifyError('');setVerifyCode('');
+    });
+  };
+
+  const handleVerifyEmailCode = e => {
+    e.preventDefault(); setVerifyError('');
+    if(!verifyCode.trim()) return setVerifyError('Введи код');
+    setVerifyLoading(true);
+    const d = pendingRegData;
+    socketRef.current?.emit('verify_email_code',{email:d.email,code:verifyCode,username:d.username,displayName:d.displayName,password:d.password},res=>{
+      setVerifyLoading(false);
+      if(res.success){
+        // Автологин
+        socketRef.current?.emit('login',{username:d.username,password:d.password},r=>{
+          if(r.success){try{localStorage.setItem('whispr_creds',JSON.stringify({u:d.username,p:d.password}));}catch(e){}finalizeLogin(r);}
+          else setVerifyError(r.error||'Ошибка входа');
+        });
+      } else setVerifyError(res.error);
+    });
+  };
+
+  const handleLogin = e => {
+    e.preventDefault(); setAuthError('');
+    socketRef.current?.emit('login',{username,password},async res=>{
+      if(res.success){
+        try{localStorage.setItem('whispr_creds',JSON.stringify({u:username.toLowerCase(),p:password}));}catch(e){}
+        finalizeLogin(res);
+      } else if(res.needs2fa){
+        // Отправляем код через EmailJS
+        try{ await sendEmailCode(res.email, res.code, res.username); }catch(e){ console.error('EmailJS error',e); }
+        setPending2faData({username:res.username, email:res.email});
+        setAuthStep('2fa');
+        setVerifyError('');setVerifyCode('');
+      } else {
+        setAuthError(res.error);
+      }
+    });
+  };
+
+  const handleVerify2faLogin = e => {
+    e.preventDefault(); setVerifyError('');
+    if(!verifyCode.trim()) return setVerifyError('Введи код');
+    setVerifyLoading(true);
+    socketRef.current?.emit('verify_2fa_login',{username:pending2faData.username,code:verifyCode},res=>{
+      setVerifyLoading(false);
+      if(res.success){
+        try{localStorage.setItem('whispr_creds',JSON.stringify({u:pending2faData.username,p:password}));}catch(e){}
+        finalizeLogin(res);
+      } else setVerifyError(res.error);
+    });
+  };
   const handleLogout = () => { cleanupCall();try{localStorage.removeItem('whispr_creds');}catch(e){/* storage unavailable */}setIsAuthenticated(false);setCurrentUser(null);setContacts([]);setGroups([]);setActiveChat(null);setMessages({});setUsername('');setPassword('');setDisplayName(''); };
 
   const handleAvatarUpload = (e, fromSettings=false) => {
@@ -1497,25 +1579,77 @@ export default function WhisprPro() {
           <LogoText size="xl" sub={true} />
         </div>
         <div className="rounded-2xl p-8 space-y-4" style={{background:'rgba(0,0,0,0.4)',backdropFilter:'blur(24px)',border:'1px solid rgba(255,255,255,0.1)',animation:'slideUp 0.5s cubic-bezier(0.34,1.2,0.64,1) 0.2s both'}}>
-          <h2 className="text-white/80 font-semibold text-base mb-2">{isRegistering?'Создать аккаунт':'Войти'}</h2>
-          <input type="text" value={username} onChange={e=>setUsername(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl text-white text-sm outline-none placeholder-white/30 transition-all focus:bg-white/10"
-            style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.12)'}} placeholder="username" />
-          {isRegistering&&<input type="text" value={displayName} onChange={e=>setDisplayName(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl text-white text-sm outline-none placeholder-white/30 transition-all focus:bg-white/10"
-            style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.12)'}} placeholder="Ваше имя" />}
-          <input type="password" value={password} onChange={e=>setPassword(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl text-white text-sm outline-none placeholder-white/30 transition-all focus:bg-white/10"
-            style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.12)'}} placeholder="Пароль" />
-          {authError&&<div className="text-red-300 text-sm px-3 py-2 rounded-lg" style={{background:'rgba(239,68,68,0.15)'}}>{authError}</div>}
-          <button onClick={isRegistering?handleRegister:handleLogin}
-            className="w-full py-3 rounded-xl text-white font-semibold text-sm transition-all hover:opacity-90 active:scale-[0.98]"
-            style={{background:'rgba(0,0,0,0.35)',border:'1px solid rgba(255,255,255,0.2)',backdropFilter:'blur(8px)'}}>
-            {isRegistering?'Зарегистрироваться':'Войти'}
-          </button>
-          <button onClick={()=>{setIsRegistering(!isRegistering);setAuthError('');}} className="w-full text-white/40 text-sm hover:text-white/70 transition-colors py-1">
-            {isRegistering?'Уже есть аккаунт? Войти':'Нет аккаунта? Регистрация'}
-          </button>
+
+          {/* ── Форма входа / регистрации ── */}
+          {authStep==='form'&&(<>
+            <h2 className="text-white/80 font-semibold text-base mb-2">{isRegistering?'Создать аккаунт':'Войти'}</h2>
+            <input type="text" value={username} onChange={e=>setUsername(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl text-white text-sm outline-none placeholder-white/30 transition-all focus:bg-white/10"
+              style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.12)'}} placeholder="username" />
+            {isRegistering&&<>
+              <input type="text" value={displayName} onChange={e=>setDisplayName(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl text-white text-sm outline-none placeholder-white/30 transition-all focus:bg-white/10"
+                style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.12)'}} placeholder="Ваше имя" />
+              <input type="email" value={regEmail} onChange={e=>setRegEmail(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl text-white text-sm outline-none placeholder-white/30 transition-all focus:bg-white/10"
+                style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.12)'}} placeholder="Email" />
+            </>}
+            <input type="password" value={password} onChange={e=>setPassword(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl text-white text-sm outline-none placeholder-white/30 transition-all focus:bg-white/10"
+              style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.12)'}} placeholder="Пароль" />
+            {authError&&<div className="text-red-300 text-sm px-3 py-2 rounded-lg" style={{background:'rgba(239,68,68,0.15)'}}>{authError}</div>}
+            <button onClick={isRegistering?handleRegister:handleLogin} disabled={verifyLoading}
+              className="w-full py-3 rounded-xl text-white font-semibold text-sm transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+              style={{background:'rgba(0,0,0,0.35)',border:'1px solid rgba(255,255,255,0.2)',backdropFilter:'blur(8px)'}}>
+              {verifyLoading?'Отправляем код...':(isRegistering?'Продолжить':'Войти')}
+            </button>
+            <button onClick={()=>{setIsRegistering(!isRegistering);setAuthError('');setRegEmail('');setAuthStep('form');}} className="w-full text-white/40 text-sm hover:text-white/70 transition-colors py-1">
+              {isRegistering?'Уже есть аккаунт? Войти':'Нет аккаунта? Регистрация'}
+            </button>
+          </>)}
+
+          {/* ── Подтверждение email при регистрации ── */}
+          {authStep==='verify_email'&&(<>
+            <div className="text-center mb-2">
+              <div className="text-3xl mb-3">📧</div>
+              <h2 className="text-white/80 font-semibold text-base">Подтверди email</h2>
+              <p className="text-white/30 text-sm mt-1">Код отправлен на <span className="text-white/60">{pendingRegData?.email}</span></p>
+            </div>
+            <input type="text" value={verifyCode} onChange={e=>setVerifyCode(e.target.value.replace(/\D/g,'').slice(0,6))}
+              className="w-full px-4 py-3 rounded-xl text-white text-center text-2xl font-mono tracking-[0.5em] outline-none"
+              style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.12)'}} placeholder="000000" maxLength={6} />
+            {verifyError&&<div className="text-red-300 text-sm px-3 py-2 rounded-lg" style={{background:'rgba(239,68,68,0.15)'}}>{verifyError}</div>}
+            <button onClick={handleVerifyEmailCode} disabled={verifyLoading||verifyCode.length!==6}
+              className="w-full py-3 rounded-xl text-white font-semibold text-sm transition-all hover:opacity-90 disabled:opacity-50"
+              style={{background:`linear-gradient(135deg,${THEMES.violet.a},${THEMES.violet.b})`}}>
+              {verifyLoading?'Проверяем...':'Подтвердить'}
+            </button>
+            <button onClick={()=>{setAuthStep('form');setVerifyCode('');setVerifyError('');}} className="w-full text-white/30 text-sm hover:text-white/60 transition-colors py-1">
+              ← Назад
+            </button>
+          </>)}
+
+          {/* ── 2FA при входе ── */}
+          {authStep==='2fa'&&(<>
+            <div className="text-center mb-2">
+              <div className="text-3xl mb-3">🔐</div>
+              <h2 className="text-white/80 font-semibold text-base">Двухэтапная проверка</h2>
+              <p className="text-white/30 text-sm mt-1">Код отправлен на <span className="text-white/60">{pending2faData?.email}</span></p>
+            </div>
+            <input type="text" value={verifyCode} onChange={e=>setVerifyCode(e.target.value.replace(/\D/g,'').slice(0,6))}
+              className="w-full px-4 py-3 rounded-xl text-white text-center text-2xl font-mono tracking-[0.5em] outline-none"
+              style={{background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.12)'}} placeholder="000000" maxLength={6} />
+            {verifyError&&<div className="text-red-300 text-sm px-3 py-2 rounded-lg" style={{background:'rgba(239,68,68,0.15)'}}>{verifyError}</div>}
+            <button onClick={handleVerify2faLogin} disabled={verifyLoading||verifyCode.length!==6}
+              className="w-full py-3 rounded-xl text-white font-semibold text-sm transition-all hover:opacity-90 disabled:opacity-50"
+              style={{background:`linear-gradient(135deg,${THEMES.violet.a},${THEMES.violet.b})`}}>
+              {verifyLoading?'Проверяем...':'Подтвердить'}
+            </button>
+            <button onClick={()=>{setAuthStep('form');setVerifyCode('');setVerifyError('');}} className="w-full text-white/30 text-sm hover:text-white/60 transition-colors py-1">
+              ← Назад
+            </button>
+          </>)}
+
         </div>
         <div className="text-center mt-4" style={{animation:'slideUp 0.5s ease 0.4s both'}}>
           <div className="flex justify-center gap-2 flex-wrap">
@@ -2305,6 +2439,102 @@ export default function WhisprPro() {
                   style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
                   {savingProfile?'Сохраняем...':'Сохранить изменения'}
                 </button>
+
+                {/* ── Email и 2FA ── */}
+                <div className="space-y-3 pt-1">
+                  <div className="text-white/25 text-xs uppercase tracking-widest">Безопасность</div>
+
+                  {/* Email */}
+                  <div className="px-4 py-3 rounded-xl space-y-2" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-white/60 text-sm">📧 Email</div>
+                        <div className="text-white/25 text-xs mt-0.5">
+                          {currentUser?.email
+                            ? <>{currentUser.email} {currentUser.emailVerified&&<span className="text-green-400">✓ подтверждён</span>}</>
+                            : 'Не привязан'}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <input type="email" id="secEmailInput" placeholder="новый@email.com"
+                        className="flex-1 px-3 py-2 rounded-lg text-white/70 text-sm outline-none placeholder-white/20"
+                        style={{background:'rgba(255,255,255,0.05)',border:'1px solid rgba(255,255,255,0.08)'}}/>
+                      <button onClick={async()=>{
+                        const inp=document.getElementById('secEmailInput');
+                        const em=inp?.value?.trim();
+                        if(!em||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){showToast('Неверный email');return;}
+                        socketRef.current?.emit('send_verify_code',{email:em,username:currentUser?.username,type:'change_email'},async res=>{
+                          if(!res.success){showToast(res.error);return;}
+                          try{await sendEmailCode(em,res.code,currentUser?.displayName||currentUser?.username);}catch(e){}
+                          const code=prompt(`Код отправлен на ${em}. Введи код:`);
+                          if(!code)return;
+                          socketRef.current?.emit('verify_email_code',{email:em,code,type:'change_email'},r=>{
+                            if(r.success){setCurrentUser(p=>({...p,email:em,emailVerified:true}));showToast('Email подтверждён','success');}
+                            else showToast(r.error);
+                          });
+                        });
+                      }} className="px-3 py-2 rounded-lg text-sm font-medium text-white/70 hover:text-white transition-colors" style={{background:'rgba(255,255,255,0.07)',border:'1px solid rgba(255,255,255,0.1)'}}>
+                        Привязать
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 2FA toggle */}
+                  <div className="px-4 py-3 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <div className="text-white/60 text-sm">🔐 Двухэтапная аутентификация</div>
+                        <div className="text-white/25 text-xs mt-0.5">{currentUser?.twoFaEnabled?'Включена — код при каждом входе':'Выключена'}</div>
+                      </div>
+                      <button
+                        disabled={!currentUser?.email||!currentUser?.emailVerified||twoFaToggleLoading}
+                        onClick={async()=>{
+                          if(!currentUser?.email||!currentUser?.emailVerified){showToast('Сначала привяжи email');return;}
+                          const type = currentUser?.twoFaEnabled ? '2fa_disable' : '2fa';
+                          setTwoFaToggleLoading(true);
+                          socketRef.current?.emit('send_verify_code',{email:currentUser.email,username:currentUser.username,type},async res=>{
+                            setTwoFaToggleLoading(false);
+                            if(!res.success){showToast(res.error);return;}
+                            try{await sendEmailCode(currentUser.email,res.code,currentUser?.displayName||currentUser?.username);}catch(e){}
+                            setTwoFaToggleStep('sent');setTwoFaToggleCode('');setTwoFaToggleError('');
+                          });
+                        }}
+                        className={`relative w-11 h-6 rounded-full transition-all disabled:opacity-40 ${currentUser?.twoFaEnabled?'bg-green-500':'bg-white/15'}`}>
+                        <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${currentUser?.twoFaEnabled?'right-0.5':'left-0.5'}`}/>
+                      </button>
+                    </div>
+                    {!currentUser?.email&&<div className="text-white/20 text-xs">Привяжи email выше чтобы включить</div>}
+                    {twoFaToggleStep==='sent'&&(
+                      <div className="mt-2 space-y-2">
+                        <div className="text-white/40 text-xs">Код отправлен на {currentUser?.email}</div>
+                        <div className="flex gap-2">
+                          <input type="text" value={twoFaToggleCode} onChange={e=>setTwoFaToggleCode(e.target.value.replace(/\D/g,'').slice(0,6))}
+                            placeholder="000000" maxLength={6}
+                            className="flex-1 px-3 py-2 rounded-lg text-white text-center font-mono text-lg tracking-widest outline-none"
+                            style={{background:'rgba(255,255,255,0.06)',border:'1px solid rgba(255,255,255,0.1)'}}/>
+                          <button disabled={twoFaToggleCode.length!==6||twoFaToggleLoading}
+                            onClick={()=>{
+                              setTwoFaToggleLoading(true);
+                              const enabling = !currentUser?.twoFaEnabled;
+                              socketRef.current?.emit('toggle_2fa',{enable:enabling,code:twoFaToggleCode},res=>{
+                                setTwoFaToggleLoading(false);
+                                if(res.success){
+                                  setCurrentUser(p=>({...p,twoFaEnabled:res.twoFaEnabled}));
+                                  setTwoFaToggleStep('idle');setTwoFaToggleCode('');
+                                  showToast(res.twoFaEnabled?'2FA включена ✓':'2FA выключена','success');
+                                } else {setTwoFaToggleError(res.error);}
+                              });
+                            }}
+                            className="px-3 py-2 rounded-lg text-sm text-white font-medium disabled:opacity-40" style={{background:`linear-gradient(135deg,${T.a},${T.b})`}}>
+                            {twoFaToggleLoading?'...':'OK'}
+                          </button>
+                        </div>
+                        {twoFaToggleError&&<div className="text-red-300 text-xs">{twoFaToggleError}</div>}
+                      </div>
+                    )}
+                  </div>
+                </div>
 
                 {/* Звук уведомлений */}
                 <div className="flex items-center justify-between px-4 py-3 rounded-xl" style={{background:'rgba(255,255,255,0.03)',border:'1px solid rgba(255,255,255,0.06)'}}>
